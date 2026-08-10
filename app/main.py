@@ -38,15 +38,44 @@ def dict_factory(cursor, row):
     fields = [column[0] for column in cursor.description]
     return {key: value for key, value in zip(fields, row)}
 
+class TursoDictCursor:
+    """Intercepts libsql cursor outputs and forces dictionary conversion."""
+    def __init__(self, cursor):
+        self.cursor = cursor
+        
+    def fetchone(self):
+        row = self.cursor.fetchone()
+        return dict_factory(self.cursor, row) if row else None
+        
+    def fetchall(self):
+        return [dict_factory(self.cursor, row) for row in self.cursor.fetchall()]
+
+class TursoDictConnection:
+    """Wraps the libsql connection to simulate sqlite3 dictionary execution."""
+    def __init__(self, conn):
+        self.conn = conn
+        
+    def execute(self, query, params=None):
+        if params is None:
+            return TursoDictCursor(self.conn.execute(query))
+        return TursoDictCursor(self.conn.execute(query, params))
+        
+    def commit(self):
+        self.conn.commit()
+        
+    def close(self):
+        self.conn.close()
+
 @contextmanager
 def db_session():
     """Dynamically routes database queries based on environment variables."""
     if TURSO_DATABASE_URL and TURSO_AUTH_TOKEN:
-        conn = libsql.connect(TURSO_DATABASE_URL, auth_token=TURSO_AUTH_TOKEN)
+        raw_conn = libsql.connect(TURSO_DATABASE_URL, auth_token=TURSO_AUTH_TOKEN)
+        conn = TursoDictConnection(raw_conn)
     else:
         conn = sqlite3.connect("app.db")
+        conn.row_factory = dict_factory
         
-    conn.row_factory = dict_factory
     try:
         yield conn
         conn.commit()
