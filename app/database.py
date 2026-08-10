@@ -35,11 +35,23 @@ class TursoDictConnection:
             return TursoDictCursor(self.conn.execute(query))
         return TursoDictCursor(self.conn.execute(query, params))
         
+    def executemany(self, query, seq_of_params):
+        """Bypasses remote bulk-insert driver bugs by forcing iterative atomic executions."""
+        for params in seq_of_params:
+            self.conn.execute(query, params)
+            
     def commit(self):
         self.conn.commit()
         
     def close(self):
         self.conn.close()
+        
+    def __enter__(self):
+        return self
+        
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type is None:
+            self.commit()
 
 @contextmanager
 def db_session():
@@ -61,6 +73,7 @@ def init_db():
     """Forces schema creation on the stateless container."""
     with db_session() as conn:
         conn.execute("CREATE TABLE IF NOT EXISTS system_state (key TEXT UNIQUE, val TEXT)")
+        
         conn.execute("""
             CREATE TABLE IF NOT EXISTS rss_cache (
                 item_id TEXT PRIMARY KEY, module_type TEXT, 
@@ -68,25 +81,29 @@ def init_db():
                 url TEXT, title TEXT, is_saved INTEGER DEFAULT 0
             )
         """)
+        
         conn.execute("""
             CREATE TABLE IF NOT EXISTS youtube_cache (
                 video_id TEXT PRIMARY KEY, title TEXT, 
-                category TEXT, published_date TEXT, is_saved INTEGER DEFAULT 0
+                channel_name TEXT, category TEXT, published_date TEXT, 
+                is_saved INTEGER DEFAULT 0
             )
         """)
+        
         conn.execute("""
             CREATE TABLE IF NOT EXISTS substack_cache (
                 article_id TEXT PRIMARY KEY, title TEXT, 
-                published_date TEXT, is_saved INTEGER DEFAULT 0
+                author TEXT, published_date TEXT, is_saved INTEGER DEFAULT 0
             )
         """)
+        
         conn.execute("""
             CREATE TABLE IF NOT EXISTS user_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, video_id TEXT, 
                 title TEXT, accessed_at TEXT
             )
         """)
-        # Inject the structurally correct worker_log table
+        
         conn.execute("""
             CREATE TABLE IF NOT EXISTS worker_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
