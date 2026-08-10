@@ -62,7 +62,7 @@ def run_maintenance(token: str, background_tasks: BackgroundTasks):
         row = conn.execute("SELECT val FROM system_state WHERE key = 'last_active'").fetchone()
         if row:
             last_active = datetime.fromisoformat(row['val'])
-            if datetime.now(timezone.utc) - last_active < timedelta(minutes=15):
+            if datetime.now(timezone.utc) - last_active < timedelta(minutes=2):
                 return {"status": "aborted", "reason": "Active session detected. Database locked."}
                 
     # 2. Define the heavy background workload
