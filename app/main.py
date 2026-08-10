@@ -1,6 +1,6 @@
 import os
 import sqlite3
-from contextlib import asynccontextmanager
+from contextlib import contextmanager, asynccontextmanager
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -38,7 +38,7 @@ def dict_factory(cursor, row):
     fields = [column[0] for column in cursor.description]
     return {key: value for key, value in zip(fields, row)}
 
-@asynccontextmanager
+@contextmanager
 def db_session():
     """Dynamically routes database queries based on environment variables."""
     if TURSO_DATABASE_URL and TURSO_AUTH_TOKEN:
