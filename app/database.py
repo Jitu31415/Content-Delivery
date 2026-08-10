@@ -86,3 +86,12 @@ def init_db():
                 title TEXT, accessed_at TEXT
             )
         """)
+        # Inject the structurally correct worker_log table
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS worker_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_at TEXT,
+                status TEXT,
+                detail TEXT
+            )
+        """)
