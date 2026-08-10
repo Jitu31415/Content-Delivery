@@ -1,6 +1,9 @@
 import os
 import sqlite3
-import libsql_experimental as libsql
+import libsql  # switched from libsql_experimental: current Turso docs point to this
+                # package now. Not the cause of the populate bug below — both
+                # packages handle rowcount/executescript identically — but
+                # libsql_experimental is pre-1.0 and no longer the documented path.
 from contextlib import contextmanager
 
 TURSO_DATABASE_URL = os.getenv("TURSO_DATABASE_URL")
@@ -84,19 +87,28 @@ def init_db():
         
         conn.execute("""
             CREATE TABLE IF NOT EXISTS youtube_cache (
-                video_id TEXT PRIMARY KEY, title TEXT, 
-                channel_name TEXT, category TEXT, published_date TEXT, 
-                is_saved INTEGER DEFAULT 0
+                video_id TEXT PRIMARY KEY, title TEXT,
+                channel_name TEXT, category TEXT, published_date TEXT,
+                thumbnail_url TEXT, is_saved INTEGER DEFAULT 0
             )
         """)
-        
+        # thumbnail_url was missing above — youtube.py's ingest_channel() has
+        # always inserted into it. That's the actual populate failure: every
+        # INSERT OR IGNORE into youtube_cache raised "table youtube_cache has
+        # no column named thumbnail_url" and was silently swallowed by
+        # worker.py's per-source try/except, so it looked like ingestion was
+        # just quietly doing nothing rather than erroring loudly.
+
         conn.execute("""
             CREATE TABLE IF NOT EXISTS substack_cache (
-                article_id TEXT PRIMARY KEY, title TEXT, 
-                author TEXT, published_date TEXT, is_saved INTEGER DEFAULT 0
+                article_id TEXT PRIMARY KEY, title TEXT,
+                author TEXT, published_date TEXT, url TEXT,
+                content_html TEXT, is_saved INTEGER DEFAULT 0
             )
         """)
-        
+        # Same bug, same shape: content_html and url were missing — every
+        # insert from substack.py's ingest_author() failed identically.
+
         conn.execute("""
             CREATE TABLE IF NOT EXISTS user_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, video_id TEXT, 
@@ -112,3 +124,16 @@ def init_db():
                 detail TEXT
             )
         """)
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS search_cache (
+                cache_key TEXT PRIMARY KEY, query TEXT, course_mode INTEGER,
+                results_json TEXT, backend TEXT, cached_at TEXT
+            )
+        """)
+        # This table didn't exist at all in the version you uploaded —
+        # youtube.py's get_cached_search()/set_cached_search() both query it
+        # unconditionally, so /youtube/search would fail with "no such
+        # table: search_cache" the moment someone used the search bar. Same
+        # class of bug as the two above: schema drifted behind the code that
+        # depends on it. Fixed here before it became your next support ticket.
