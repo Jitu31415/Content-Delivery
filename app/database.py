@@ -72,6 +72,24 @@ def db_session():
     finally:
         conn.close()
 
+def _ensure_columns(conn, table, column_defs):
+    """Adds any column in `column_defs` that's missing from an
+    already-existing table. Necessary because CREATE TABLE IF NOT EXISTS is
+    a no-op against a table that already exists — it does NOT reconcile a
+    changed schema, so on your live Turso database (which already had
+    youtube_cache/substack_cache from before this fix), the corrected
+    CREATE TABLE statements below never touched the existing tables. This
+    is what ran on every startup and actually fixed it. Safe to call every
+    time init_db() runs: does nothing once a column is already present.
+    column_defs: list of (column_name, sql_type_declaration) tuples.
+    """
+    cur = conn.execute(f"PRAGMA table_info({table})")
+    existing = {row["name"] for row in cur.fetchall()}
+    for name, decl in column_defs:
+        if name not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+
+
 def init_db():
     """Forces schema creation on the stateless container."""
     with db_session() as conn:
@@ -137,3 +155,10 @@ def init_db():
         # table: search_cache" the moment someone used the search bar. Same
         # class of bug as the two above: schema drifted behind the code that
         # depends on it. Fixed here before it became your next support ticket.
+
+        # --- migration pass: reconciles tables that already existed before
+        # this fix, on your live Turso database, with a schema that had
+        # already drifted out from under them. This is the step that
+        # actually matters for your current database's state.
+        _ensure_columns(conn, "youtube_cache", [("thumbnail_url", "TEXT")])
+        _ensure_columns(conn, "substack_cache", [("content_html", "TEXT"), ("url", "TEXT")])
