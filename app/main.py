@@ -1,6 +1,5 @@
 import os
-import sqlite3
-from contextlib import contextmanager, asynccontextmanager
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -8,14 +7,13 @@ from dotenv import load_dotenv
 
 load_dotenv()  # must run before app.config reads any env vars below
 
-
 from fastapi import FastAPI, Header, HTTPException, Request, BackgroundTasks
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-import libsql_experimental as libsql
 
 from app import config, worker
+from app.database import db_session, init_db
 from app.extractors import youtube as youtube_extractor
 
 BASE_DIR = Path(__file__).parent.parent
@@ -30,107 +28,6 @@ VALID_MODULES = {
     "rss": ("rss_cache", "item_id"),
 }
 
-# Cloud environment variables
-TURSO_DATABASE_URL = os.getenv("TURSO_DATABASE_URL")
-TURSO_AUTH_TOKEN = os.getenv("TURSO_AUTH_TOKEN")
-
-def dict_factory(cursor, row):
-    """Universal row parser compatible with both sqlite3 and libsql drivers."""
-    fields = [column[0] for column in cursor.description]
-    return {key: value for key, value in zip(fields, row)}
-
-class TursoDictCursor:
-    """Intercepts libsql cursor outputs and forces dictionary conversion."""
-    def __init__(self, cursor):
-        self.cursor = cursor
-        
-    def fetchone(self):
-        row = self.cursor.fetchone()
-        return dict_factory(self.cursor, row) if row else None
-        
-    def fetchall(self):
-        return [dict_factory(self.cursor, row) for row in self.cursor.fetchall()]
-
-class TursoDictConnection:
-    """Wraps the libsql connection to simulate sqlite3 dictionary execution."""
-    def __init__(self, conn):
-        self.conn = conn
-        
-    def execute(self, query, params=None):
-        if params is None:
-            return TursoDictCursor(self.conn.execute(query))
-        return TursoDictCursor(self.conn.execute(query, params))
-        
-    def commit(self):
-        self.conn.commit()
-        
-    def close(self):
-        self.conn.close()
-
-@contextmanager
-def db_session():
-    """Dynamically routes database queries based on environment variables."""
-    if TURSO_DATABASE_URL and TURSO_AUTH_TOKEN:
-        raw_conn = libsql.connect(TURSO_DATABASE_URL, auth_token=TURSO_AUTH_TOKEN)
-        conn = TursoDictConnection(raw_conn)
-    else:
-        conn = sqlite3.connect("app.db")
-        conn.row_factory = dict_factory
-        
-    try:
-        yield conn
-        conn.commit()
-    finally:
-        conn.close()
-
-def init_db():
-    """Forces schema creation on the stateless Render container."""
-    with db_session() as conn:
-        # State ledger for active session locking
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS system_state (
-                key TEXT UNIQUE,
-                val TEXT
-            )
-        """)
-        # Base cache tables (Ensure these match your full schema requirements)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS rss_cache (
-                item_id TEXT PRIMARY KEY,
-                module_type TEXT,
-                source_name TEXT,
-                published_date TEXT,
-                url TEXT,
-                title TEXT,
-                is_saved INTEGER DEFAULT 0
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS youtube_cache (
-                video_id TEXT PRIMARY KEY,
-                title TEXT,
-                category TEXT,
-                published_date TEXT,
-                is_saved INTEGER DEFAULT 0
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS substack_cache (
-                article_id TEXT PRIMARY KEY,
-                title TEXT,
-                published_date TEXT,
-                is_saved INTEGER DEFAULT 0
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS user_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                video_id TEXT,
-                title TEXT,
-                accessed_at TEXT
-            )
-        """)
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
@@ -139,7 +36,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Content Aggregator", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
-
 
 # ---------------------------------------------------------------- session & cron
 
@@ -185,13 +81,11 @@ def run_maintenance(token: str, background_tasks: BackgroundTasks):
     
     return {"status": "Maintenance payload dispatched to background thread"}
 
-
 # ---------------------------------------------------------------- hub
 
 @app.get("/", response_class=HTMLResponse)
 def hub(request: Request):
     return templates.TemplateResponse(request, "hub.html", {})
-
 
 # ---------------------------------------------------------------- youtube
 
@@ -215,7 +109,6 @@ def youtube_home(request: Request, tab: str = "scientific", page: int = 1):
         "search_results": None, "query": "", "course_mode": False,
         "error": None, "degraded": False,
     })
-
 
 @app.get("/youtube/search", response_class=HTMLResponse)
 def youtube_search(request: Request, q: str = "", course_mode: bool = False):
@@ -244,7 +137,6 @@ def youtube_search(request: Request, q: str = "", course_mode: bool = False):
         "error": error, "degraded": degraded,
     })
 
-
 @app.get("/youtube/playlist/{playlist_id}", response_class=HTMLResponse)
 def youtube_playlist(request: Request, playlist_id: str):
     videos = youtube_extractor.get_playlist_videos(
@@ -258,7 +150,6 @@ def youtube_playlist(request: Request, playlist_id: str):
         "videos": videos, "playlist_id": playlist_id,
     })
 
-
 @app.post("/youtube/click")
 async def log_click(request: Request):
     body = await request.json()
@@ -271,7 +162,6 @@ async def log_click(request: Request):
             (video_id, title, datetime.now(timezone.utc).isoformat()),
         )
     return {"ok": True}
-
 
 # ---------------------------------------------------------------- save toggle (shared)
 
@@ -288,7 +178,6 @@ def toggle_save(module: str, item_id: str):
         conn.execute(f"UPDATE {table} SET is_saved = ? WHERE {pk} = ?", (new_val, item_id))
     return {"ok": True, "is_saved": bool(new_val)}
 
-
 # ---------------------------------------------------------------- substack
 
 @app.get("/substack", response_class=HTMLResponse)
@@ -302,7 +191,6 @@ def substack_feed(request: Request, page: int = 1):
     return templates.TemplateResponse(request, "substack.html", {
         "articles": articles, "page": page,
     })
-
 
 # ---------------------------------------------------------------- news / papers
 
@@ -380,3 +268,4 @@ async def update_substack_cookie(request: Request, x_admin_token: str = Header(d
 def trigger_worker(x_admin_token: str = Header(default="")):
     _check_admin(x_admin_token)
     return worker.run_cycle()
+
