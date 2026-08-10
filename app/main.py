@@ -8,7 +8,8 @@ from dotenv import load_dotenv
 
 load_dotenv()  # must run before app.config reads any env vars below
 
-from fastapi import FastAPI, Header, HTTPException, Request
+
+from fastapi import FastAPI, Header, HTTPException, Request, BackgroundTasks
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -154,36 +155,35 @@ def register_activity():
     return {"status": "locked"}
 
 @app.get("/cron/maintenance")
-def run_maintenance(token: str):
-    """External cron trigger to purge cache and execute ingestion."""
+def run_maintenance(token: str, background_tasks: BackgroundTasks):
+    """External cron trigger. Dispatches ingestion to a background task."""
     expected = config.get_admin_token()
     if not expected or token != expected:
         raise HTTPException(status_code=403, detail="invalid or missing admin token")
         
     with db_session() as conn:
-        # Check active session lock
+        # 1. Check active session lock synchronously
         row = conn.execute("SELECT val FROM system_state WHERE key = 'last_active'").fetchone()
         if row:
             last_active = datetime.fromisoformat(row['val'])
             if datetime.now(timezone.utc) - last_active < timedelta(minutes=15):
                 return {"status": "aborted", "reason": "Active session detected. Database locked."}
                 
-        # Purge stale, unsaved cache entries (7 days)
-        expiry = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    # 2. Define the heavy background workload
+    def background_ingestion():
+        with db_session() as conn:
+            expiry = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+            conn.execute("DELETE FROM rss_cache WHERE published_date < ? AND is_saved = 0", (expiry,))
+            conn.execute("DELETE FROM youtube_cache WHERE published_date < ? AND is_saved = 0", (expiry,))
+            conn.execute("DELETE FROM substack_cache WHERE published_date < ? AND is_saved = 0", (expiry,))
         
-        # Purge across modules safely
-        conn.execute("DELETE FROM rss_cache WHERE published_date < ? AND is_saved = 0", (expiry,))
-        conn.execute("DELETE FROM youtube_cache WHERE published_date < ? AND is_saved = 0", (expiry,))
-        conn.execute("DELETE FROM substack_cache WHERE published_date < ? AND is_saved = 0", (expiry,))
-        
-    # Execute the synchronous worker cycle
-    # This replaces the internal asyncio schedule
-    worker_result = worker.run_cycle()
+        # Execute the ingestion worker
+        worker.run_cycle()
+
+    # 3. Dispatch and return immediately
+    background_tasks.add_task(background_ingestion)
     
-    return {
-        "status": "Cache renewed and purged", 
-        "worker_execution": worker_result
-    }
+    return {"status": "Maintenance payload dispatched to background thread"}
 
 
 # ---------------------------------------------------------------- hub
