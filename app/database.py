@@ -14,6 +14,11 @@ class TursoDictCursor:
     def __init__(self, cursor):
         self.cursor = cursor
         
+    @property
+    def rowcount(self):
+        """Exposes the number of rows modified by the last query."""
+        return getattr(self.cursor, 'rowcount', -1)
+        
     def fetchone(self):
         row = self.cursor.fetchone()
         return dict_factory(self.cursor, row) if row else None
