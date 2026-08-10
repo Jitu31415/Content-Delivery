@@ -1,0 +1,21 @@
+{
+  "youtube": {
+    "scientific": ["UCUHW94eEFW7hkUMVaZz4eDg", "UCbfYPyITQ-7l4upoX8nvctg","UCHnyfMqiRRG1u-2MsSQLbXA","UCm5mt-A4w61lknZ9lCsZtBw","UCMOqf8ab-42UUQIdVoKwjlQ","UCYO_jab_esuFRV4b17AJtAw"],
+    "music_poetry": ["UCQjBsscIa_mgEnSvWpm_9vw","UCafEZMU5s8geb9oIly6xTrg"],
+    "podcast": ["UCWJPKXhkcMGXafdtqGx1mEw","UCGq-a57w-aPwyi3pW7XLiHw"],
+    "religious": ["UCRtiU-lpcBSi-ipFKyfIkug","UCmBeDLS33OmwgiuhWPtwlyQ"]
+  },
+  "substack": [
+    "erinmerylstudy","ummahelevated","hasifcore"
+  ],
+  "news": [
+    {"name": "Daily_Star", "url": "https://www.thedailystar.net/rss"},
+    {"name":"Prothom Alo", "url": "https://en.prothomalo.com/feed/"},
+    {"name":"The Business Standard", "url": "https://www.tbsnews.net/rss.xml"},
+    {"name":"Al Jazeera", "url": "https://www.aljazeera.com/xml/rss/all.xml"}
+  ],
+  "papers": [
+    {"name": "arXiv — Fluid Dynamics", "url": "http://export.arxiv.org/rss/physics.flu-dyn"},
+    {"name": "Nature — Earth Sciences", "url": "https://www.nature.com/subjects/earth-sciences/nature.rss"}
+  ]
+}

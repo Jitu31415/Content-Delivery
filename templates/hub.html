@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}reading room{% endblock %}
+{% block content %}
+<section class="hub">
+  <p class="hub-lede">four feeds. chronological, whitelisted, cached locally. no ranking, no recommendation.</p>
+  <div class="hub-grid">
+    <a class="hub-node" href="/youtube">
+      <span class="hub-label">youtube</span>
+      <span class="hub-desc">channel feeds only — no algorithm</span>
+    </a>
+    <a class="hub-node" href="/substack">
+      <span class="hub-label">substack</span>
+      <span class="hub-desc">subscribed authors, full text</span>
+    </a>
+    <a class="hub-node" href="/news">
+      <span class="hub-label">news</span>
+      <span class="hub-desc">wire feeds, chronological</span>
+    </a>
+    <a class="hub-node" href="/papers">
+      <span class="hub-label">papers &amp; articles</span>
+      <span class="hub-desc">journal RSS — arXiv, Nature</span>
+    </a>
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% if search_results is not none %}Results — {% endif %}Reading Room / YouTube</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="/static/youtube-theme.css">
+</head>
+<body>
+    <div class="top-nav d-flex justify-content-between align-items-center px-3 py-2">
+        <a href="/" class="back-btn text-decoration-none">&larr; reading room</a>
+        <span class="module-wordmark">youtube</span>
+    </div>
+
+    <div class="container mb-5 pt-3">
+
+        <form class="search-shell mx-auto mb-5" method="get" action="/youtube/search">
+            <div class="d-flex gap-2 mb-3">
+                <input type="text" name="q" class="form-control form-control-lg"
+                       placeholder="enter technical topic..." value="{{ query }}" autocomplete="off">
+                <button type="submit" class="btn btn-search px-4">search</button>
+            </div>
+            <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" role="switch" name="course_mode"
+                       value="true" id="courseModeSwitch" {% if course_mode %}checked{% endif %}>
+                <label class="form-check-label small text-uppercase course-label" for="courseModeSwitch">
+                    strict course mode (playlists only)
+                </label>
+            </div>
+        </form>
+
+        {% if error %}
+        <div class="alert-dark-custom mb-4">search failed: {{ error }}</div>
+        {% endif %}
+        {% if degraded %}
+        <div class="alert-dark-custom mb-4">
+            degraded mode: official category filter unavailable (no API key configured, or quota exceeded) —
+            showing heuristic-filtered results from Invidious instead. False positives are more likely here.
+        </div>
+        {% endif %}
+
+        {% if search_results is not none %}
+            <h2 class="section-heading">results for &ldquo;{{ query }}&rdquo;{% if course_mode %} &middot; course mode{% endif %}</h2>
+            <div class="video-grid">
+                {% for item in search_results %}
+                <div class="custom-card shadow-sm">
+                    {% if item.Type == 'Playlist' %}
+                    <a href="/youtube/playlist/{{ item.ID }}" class="card-link-block">
+                        <div class="thumbnail-wrapper">
+                            <img src="{{ item.Thumbnail }}" class="card-img-top" alt="{{ item.Title }}">
+                            <span class="subtle-badge">COURSE</span>
+                        </div>
+                        <div class="card-body">
+                            <div class="video-title" title="{{ item.Title }}">{{ item.Title }}</div>
+                            <p class="video-channel">{{ item.Channel }}</p>
+                        </div>
+                    </a>
+                    {% else %}
+                    <div class="thumbnail-wrapper video-trigger"
+                         data-embed="{{ item.Embed_URL }}" data-id="{{ item.ID }}" data-title="{{ item.Title }}">
+                        <img src="{{ item.Thumbnail }}" class="card-img-top" alt="{{ item.Title }}">
+                    </div>
+                    <div class="card-body">
+                        <div class="video-title video-trigger" title="{{ item.Title }}"
+                             data-embed="{{ item.Embed_URL }}" data-id="{{ item.ID }}" data-title="{{ item.Title }}">
+                            {{ item.Title }}
+                        </div>
+                        <p class="video-channel">{{ item.Channel }}</p>
+                    </div>
+                    {% endif %}
+                </div>
+                {% else %}
+                <p class="empty-note">no educational results survived filtering — try a more specific query</p>
+                {% endfor %}
+            </div>
+        {% else %}
+            <nav class="tabs-dark mb-4">
+                {% for t in tabs %}
+                <a href="/youtube?tab={{ t }}" class="tab-dark {% if t == active_tab %}active{% endif %}">{{ t.replace('_', ' & ') }}</a>
+                {% endfor %}
+            </nav>
+
+            {% if history %}
+            <h2 class="section-heading">jump back in</h2>
+            <div class="video-grid mb-5">
+                {% for h in history %}
+                <div class="custom-card shadow-sm">
+                    <div class="thumbnail-wrapper video-trigger"
+                         data-embed="https://www.youtube.com/embed/{{ h.video_id }}?autoplay=1&rel=0&modestbranding=1"
+                         data-id="{{ h.video_id }}" data-title="{{ h.title }}">
+                        <span class="subtle-badge">{{ h.accessed_at[:10] }}</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="video-title video-trigger" title="{{ h.title }}"
+                             data-embed="https://www.youtube.com/embed/{{ h.video_id }}?autoplay=1&rel=0&modestbranding=1"
+                             data-id="{{ h.video_id }}" data-title="{{ h.title }}">
+                            {{ h.title }}
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            <h2 class="section-heading">{{ active_tab.replace('_', ' & ') }}</h2>
+            <div class="video-grid">
+                {% for v in videos %}
+                <div class="custom-card shadow-sm">
+                    <div class="thumbnail-wrapper video-trigger"
+                         data-embed="https://www.youtube.com/embed/{{ v.video_id }}?autoplay=1&rel=0&modestbranding=1"
+                         data-id="{{ v.video_id }}" data-title="{{ v.title }}">
+                        <img src="{{ v.thumbnail_url }}" class="card-img-top" alt="{{ v.title }}">
+                    </div>
+                    <div class="card-body">
+                        <div class="video-title video-trigger" title="{{ v.title }}"
+                             data-embed="https://www.youtube.com/embed/{{ v.video_id }}?autoplay=1&rel=0&modestbranding=1"
+                             data-id="{{ v.video_id }}" data-title="{{ v.title }}">
+                            {{ v.title }}
+                        </div>
+                        <p class="video-channel">{{ v.channel_name }}</p>
+                        <button class="save-btn-dark" data-module="youtube" data-id="{{ v.video_id }}">{{ '★' if v.is_saved else '☆' }}</button>
+                    </div>
+                </div>
+                {% else %}
+                <p class="empty-note">no cached videos in this category yet — worker has not run, or the channel list is empty</p>
+                {% endfor %}
+            </div>
+            <div class="pager-dark">
+                {% if page > 1 %}<a href="/youtube?tab={{ active_tab }}&page={{ page - 1 }}">&larr; prev</a>{% endif %}
+                {% if videos|length == 30 %}<a href="/youtube?tab={{ active_tab }}&page={{ page + 1 }}">next &rarr;</a>{% endif %}
+            </div>
+        {% endif %}
+    </div>
+
+    <div class="modal fade" id="videoModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-lg modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header border-0 pb-0 pt-3 pe-3">
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body pt-0 pb-3 px-3">
+                    <div class="ratio ratio-16x9">
+                        <iframe id="modalIframe" src="" title="video player" frameborder="0"
+                                sandbox="allow-scripts allow-same-origin allow-presentation"
+                                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                                allowfullscreen></iframe>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="/static/youtube-app.js"></script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}reading room{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a href="/" class="wordmark">reading room</a>
+    <nav class="site-nav">
+      <a href="/youtube">youtube</a>
+      <a href="/substack">substack</a>
+      <a href="/news">news</a>
+      <a href="/papers">papers</a>
+    </nav>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

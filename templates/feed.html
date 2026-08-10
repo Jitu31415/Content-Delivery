@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}{{ module_name }} — reading room{% endblock %}
+{% block content %}
+<section class="module">
+  <h2 class="section-label">{{ module_name }}</h2>
+  
+  {% if tabs %}
+  <nav class="tabs" style="margin-bottom: 20px; border-bottom: 1px solid #ccc; padding-bottom: 10px;">
+    {% for t in tabs %}
+    <a href="/{{ module_slug }}?tab={{ t }}" style="margin-right: 15px; text-transform: capitalize; text-decoration: none; 
+            font-weight: {{ 'bold' if t == active_tab else 'normal' }};
+            color: {{ '#000' if t == active_tab else '#666' }};">
+      {{ t }}
+    </a>
+    {% endfor %}
+  </nav>
+  {% endif %}
+
+  <ul class="feed-list">
+    {% for i in items %}
+    <li class="feed-item">
+      <a href="{{ i.url }}" target="_blank" rel="noopener">
+        <span class="feed-title">{{ i.title }}</span>
+        <span class="feed-meta">{{ i.source_name }} · {{ i.published_date }}</span>
+      </a>
+      <button class="save-btn" data-module="rss" data-id="{{ i.item_id }}">{{ '★' if i.is_saved else '☆' }}</button>
+    </li>
+    {% else %}
+    <li class="empty">no items cached yet</li>
+    {% endfor %}
+  </ul>
+
+  <div class="pager">
+    {% if page > 1 %}
+      <a href="/{{ module_slug }}?page={{ page - 1 }}{% if active_tab %}&tab={{ active_tab }}{% endif %}">&larr; prev</a>
+    {% endif %}
+    {% if items|length == 40 %}
+      <a href="/{{ module_slug }}?page={{ page + 1 }}{% if active_tab %}&tab={{ active_tab }}{% endif %}">next &rarr;</a>
+    {% endif %}
+  </div>
+</section>
+<script src="/static/app.js"></script>
+{% endblock %}

@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}substack — reading room{% endblock %}
+{% block content %}
+<section class="module module--reading">
+  <h2 class="section-label">subscribed authors</h2>
+  <ul class="article-list">
+    {% for a in articles %}
+    <li class="article-item">
+      <div class="article-head">
+        <span class="article-author">{{ a.author }}</span>
+        <span class="article-date">{{ a.published_date }}</span>
+        <button class="save-btn" data-module="substack" data-id="{{ a.article_id }}">{{ '★' if a.is_saved else '☆' }}</button>
+      </div>
+      <h3 class="article-title"><a href="{{ a.url }}" target="_blank" rel="noopener">{{ a.title }}</a></h3>
+      
+      <!-- Structural isolation via details tag -->
+      <details>
+          <summary>Expand Article</summary>
+          <div class="content-body">
+              {{ a.content_html | safe }}
+          </div>
+      </details>
+    </li>
+    {% else %}
+    <li class="empty">no articles cached yet</li>
+    {% endfor %}
+  </ul>
+  <div class="pager">
+    {% if page > 1 %}<a href="/substack?page={{ page - 1 }}">&larr; prev</a>{% endif %}
+    {% if articles|length == 20 %}<a href="/substack?page={{ page + 1 }}">next &rarr;</a>{% endif %}
+  </div>
+</section>
+<script src="/static/app.js"></script>
+{% endblock %}
