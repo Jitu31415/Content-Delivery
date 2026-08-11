@@ -66,15 +66,26 @@ def run_cycle() -> dict:
 
 
 def _prune(conn) -> dict:
-    days = config.get_prune_days()
-    cutoff = f"-{days} days"
+    """Applies segmented TTLs based on content velocity."""
     counts = {}
-    for table in ("youtube_cache", "substack_cache", "rss_cache"):
-        cur = conn.execute(
-            f"DELETE FROM {table} WHERE published_date < date('now', ?) AND is_saved = 0",
-            (cutoff,),
-        )
-        counts[table] = cur.rowcount
+    
+    # 1. Ephemeral Content (News/RSS) -> 7 Day TTL
+    cur_rss = conn.execute(
+        "DELETE FROM rss_cache WHERE published_date < date('now', '-7 days') AND is_saved = 0"
+    )
+    counts["rss_cache"] = cur_rss.rowcount
+    
+    # 2. Evergreen Archive -> 365 Day TTL
+    cur_yt = conn.execute(
+        "DELETE FROM youtube_cache WHERE published_date < date('now', '-365 days') AND is_saved = 0"
+    )
+    counts["youtube_cache"] = cur_yt.rowcount
+    
+    cur_sub = conn.execute(
+        "DELETE FROM substack_cache WHERE published_date < date('now', '-365 days') AND is_saved = 0"
+    )
+    counts["substack_cache"] = cur_sub.rowcount
+    
     return counts
 
 
