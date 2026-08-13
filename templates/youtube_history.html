@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>History — Reading Room / YouTube</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="/static/youtube-theme.css">
+</head>
+<body>
+    <div class="top-nav d-flex justify-content-between align-items-center px-3 py-2">
+        <a href="/youtube" class="back-btn text-decoration-none">&larr; youtube</a>
+        <span class="module-wordmark">history</span>
+        <span></span>
+    </div>
+
+    <div class="container mb-5 pt-3">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h2 class="section-heading" style="margin:0;">this device only</h2>
+            {% if entries %}
+            <button class="clear-history-btn">clear all</button>
+            {% endif %}
+        </div>
+
+        <p class="history-note">
+            Only videos played on this browser show up here — history isn't shared
+            across your other devices. Deleting an entry only removes it from this list;
+            it doesn't affect the cached video itself.
+        </p>
+
+        <div class="video-grid" id="historyGrid">
+            {% for h in entries %}
+            <div class="custom-card shadow-sm" data-entry-id="{{ h.id }}">
+                <div class="thumbnail-wrapper video-trigger"
+                     data-embed="https://www.youtube.com/embed/{{ h.video_id }}?autoplay=1&rel=0&modestbranding=1"
+                     data-id="{{ h.video_id }}" data-title="{{ h.title }}">
+                    <span class="subtle-badge">{{ h.accessed_at[:10] }}</span>
+                </div>
+                <div class="card-body">
+                    <div class="video-title video-trigger" title="{{ h.title }}"
+                         data-embed="https://www.youtube.com/embed/{{ h.video_id }}?autoplay=1&rel=0&modestbranding=1"
+                         data-id="{{ h.video_id }}" data-title="{{ h.title }}">
+                        {{ h.title }}
+                    </div>
+                    <button class="history-delete-btn" data-entry-id="{{ h.id }}" title="Remove from history">remove</button>
+                </div>
+            </div>
+            {% else %}
+            <p class="empty-note">no history on this device yet</p>
+            {% endfor %}
+        </div>
+
+        <div class="pager-dark">
+            {% if page > 1 %}<a href="/youtube/history?page={{ page - 1 }}">&larr; prev</a>{% endif %}
+            {% if entries|length == 30 %}<a href="/youtube/history?page={{ page + 1 }}">next &rarr;</a>{% endif %}
+        </div>
+    </div>
+
+    <div class="modal fade" id="videoModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-lg modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header border-0 pb-0 pt-3 pe-3">
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body pt-0 pb-3 px-3">
+                    <div class="ratio ratio-16x9">
+                        <iframe id="modalIframe" src="" title="video player" frameborder="0"
+                                sandbox="allow-scripts allow-same-origin allow-presentation"
+                                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                                allowfullscreen></iframe>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="/static/youtube-app.js"></script>
+</body>
+</html>
