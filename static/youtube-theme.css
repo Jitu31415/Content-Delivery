@@ -30,6 +30,49 @@ body {
 }
 .back-btn:hover { background: #333; color: #fff; }
 
+.history-link {
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #999;
+    text-decoration: none;
+}
+.history-link:hover { color: #c90b0b; }
+
+.history-note {
+    font-size: 0.82rem;
+    color: #888;
+    max-width: 60ch;
+    margin-bottom: 1.5rem;
+}
+
+.history-delete-btn {
+    align-self: flex-start;
+    background: none;
+    border: none;
+    color: #888;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    padding: 0;
+    margin-top: 0.2rem;
+}
+.history-delete-btn:hover { color: #c90b0b; }
+
+.clear-history-btn {
+    background-color: transparent;
+    color: #c90b0b;
+    border: 1px solid rgba(201, 11, 11, 0.4);
+    border-radius: 2px;
+    padding: 0.4rem 1rem;
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    cursor: pointer;
+}
+.clear-history-btn:hover { background-color: rgba(201, 11, 11, 0.12); }
+
 .module-wordmark {
     font-size: 0.85rem;
     letter-spacing: 0.1em;

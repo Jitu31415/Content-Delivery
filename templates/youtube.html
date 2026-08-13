@@ -11,6 +11,7 @@
     <div class="top-nav d-flex justify-content-between align-items-center px-3 py-2">
         <a href="/" class="back-btn text-decoration-none">&larr; reading room</a>
         <span class="module-wordmark">youtube</span>
+        <a href="/youtube/history" class="history-link">history</a>
     </div>
 
     <div class="container mb-5 pt-3">
@@ -80,28 +81,6 @@
                 <a href="/youtube?tab={{ t }}" class="tab-dark {% if t == active_tab %}active{% endif %}">{{ t.replace('_', ' & ') }}</a>
                 {% endfor %}
             </nav>
-
-            {% if history %}
-            <h2 class="section-heading">jump back in</h2>
-            <div class="video-grid mb-5">
-                {% for h in history %}
-                <div class="custom-card shadow-sm">
-                    <div class="thumbnail-wrapper video-trigger"
-                         data-embed="https://www.youtube.com/embed/{{ h.video_id }}?autoplay=1&rel=0&modestbranding=1"
-                         data-id="{{ h.video_id }}" data-title="{{ h.title }}">
-                        <span class="subtle-badge">{{ h.accessed_at[:10] }}</span>
-                    </div>
-                    <div class="card-body">
-                        <div class="video-title video-trigger" title="{{ h.title }}"
-                             data-embed="https://www.youtube.com/embed/{{ h.video_id }}?autoplay=1&rel=0&modestbranding=1"
-                             data-id="{{ h.video_id }}" data-title="{{ h.title }}">
-                            {{ h.title }}
-                        </div>
-                    </div>
-                </div>
-                {% endfor %}
-            </div>
-            {% endif %}
 
             <h2 class="section-heading">{{ active_tab.replace('_', ' & ') }}</h2>
             <div class="video-grid">

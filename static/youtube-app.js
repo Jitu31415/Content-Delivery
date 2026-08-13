@@ -43,5 +43,36 @@ document.addEventListener('DOMContentLoaded', () => {
                 console.error('save failed', err);
             }
         }
+
+        const deleteBtn = e.target.closest('.history-delete-btn');
+        if (deleteBtn) {
+            e.preventDefault();
+            e.stopPropagation();
+            const entryId = deleteBtn.dataset.entryId;
+            try {
+                const resp = await fetch(`/youtube/history/${entryId}/delete`, { method: 'POST' });
+                if (!resp.ok) throw new Error(resp.status);
+                const card = document.querySelector(`.custom-card[data-entry-id="${entryId}"]`);
+                if (card) card.remove();
+            } catch (err) {
+                console.error('history delete failed', err);
+            }
+        }
+
+        const clearBtn = e.target.closest('.clear-history-btn');
+        if (clearBtn) {
+            e.preventDefault();
+            if (!confirm('Clear all history on this device? This cannot be undone.')) return;
+            try {
+                const resp = await fetch('/youtube/history/clear', { method: 'POST' });
+                if (!resp.ok) throw new Error(resp.status);
+                document.querySelectorAll('#historyGrid .custom-card').forEach(c => c.remove());
+                clearBtn.remove();
+                const grid = document.getElementById('historyGrid');
+                if (grid) grid.innerHTML = '<p class="empty-note">no history on this device yet</p>';
+            } catch (err) {
+                console.error('clear history failed', err);
+            }
+        }
     });
 });

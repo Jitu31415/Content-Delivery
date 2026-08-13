@@ -162,3 +162,10 @@ def init_db():
         # actually matters for your current database's state.
         _ensure_columns(conn, "youtube_cache", [("thumbnail_url", "TEXT")])
         _ensure_columns(conn, "substack_cache", [("content_html", "TEXT"), ("url", "TEXT")])
+        _ensure_columns(conn, "user_history", [("device_id", "TEXT")])
+        # New: per-device history scoping. Existing rows predate this column
+        # and get NULL — they won't match any real device_id filter, so they
+        # won't appear in the new per-device history tab. There's no way to
+        # retroactively attribute old entries to a device that was never
+        # recorded, so this is the honest outcome, not a bug — old entries
+        # aren't silently reassigned to whichever device happens to load next.

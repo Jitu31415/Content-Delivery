@@ -1,4 +1,5 @@
 import os
+import secrets
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -7,7 +8,7 @@ from dotenv import load_dotenv
 
 load_dotenv()  # must run before app.config reads any env vars below
 
-from fastapi import FastAPI, Header, HTTPException, Request, BackgroundTasks
+from fastapi import FastAPI, Header, HTTPException, Request, Response, BackgroundTasks
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -18,6 +19,23 @@ from app.extractors import youtube as youtube_extractor
 
 BASE_DIR = Path(__file__).parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+
+DEVICE_ID_COOKIE = "device_id"
+
+
+def _get_or_set_device_id(request: Request, response: Response) -> str:
+    """History is scoped per-device via this cookie, not per-user-account —
+    there's no login system here. httponly + 2-year expiry: it's an opaque
+    identifier, not something the page's own JS needs to read."""
+    device_id = request.cookies.get(DEVICE_ID_COOKIE)
+    if not device_id:
+        device_id = secrets.token_hex(16)
+        response.set_cookie(
+            DEVICE_ID_COOKIE, device_id,
+            max_age=60 * 60 * 24 * 365 * 2,
+            httponly=True, samesite="lax",
+        )
+    return device_id
 
 TABS = ["scientific", "music_poetry", "podcast", "religious"]
 
@@ -100,11 +118,8 @@ def youtube_home(request: Request, tab: str = "scientific", page: int = 1):
             "ORDER BY published_date DESC LIMIT ? OFFSET ?",
             (tab, limit, offset),
         ).fetchall()
-        history = conn.execute(
-            "SELECT * FROM user_history ORDER BY accessed_at DESC LIMIT 15"
-        ).fetchall()
     return templates.TemplateResponse(request, "youtube.html", {
-        "videos": videos, "history": history,
+        "videos": videos,
         "tabs": TABS, "active_tab": tab, "page": page,
         "search_results": None, "query": "", "course_mode": False,
         "error": None, "degraded": False,
@@ -131,7 +146,7 @@ def youtube_search(request: Request, q: str = "", course_mode: bool = False):
                 except Exception as e:
                     error = str(e)
     return templates.TemplateResponse(request, "youtube.html", {
-        "videos": [], "history": [], "tabs": TABS,
+        "videos": [], "tabs": TABS,
         "active_tab": None, "page": 1,
         "search_results": results, "query": q, "course_mode": course_mode,
         "error": error, "degraded": degraded,
@@ -151,17 +166,61 @@ def youtube_playlist(request: Request, playlist_id: str):
     })
 
 @app.post("/youtube/click")
-async def log_click(request: Request):
+async def log_click(request: Request, response: Response):
     body = await request.json()
     video_id, title = body.get("video_id"), body.get("title", "")
     if not video_id:
         raise HTTPException(400, "video_id required")
+    device_id = _get_or_set_device_id(request, response)
     with db_session() as conn:
         conn.execute(
-            "INSERT INTO user_history (video_id, title, accessed_at) VALUES (?, ?, ?)",
-            (video_id, title, datetime.now(timezone.utc).isoformat()),
+            "INSERT INTO user_history (video_id, title, accessed_at, device_id) VALUES (?, ?, ?, ?)",
+            (video_id, title, datetime.now(timezone.utc).isoformat(), device_id),
         )
     return {"ok": True}
+
+
+# ---------------------------------------------------------------- youtube history
+# Separate tab, not the "jump back in" strip that used to sit on /youtube —
+# scoped per-device via the device_id cookie, not shared globally, and
+# deletable (per-entry and clear-all), unlike the old embedded version.
+
+@app.get("/youtube/history", response_class=HTMLResponse)
+def youtube_history(request: Request, response: Response, page: int = 1):
+    device_id = _get_or_set_device_id(request, response)
+    limit, offset = 30, (page - 1) * 30
+    with db_session() as conn:
+        entries = conn.execute(
+            "SELECT * FROM user_history WHERE device_id = ? "
+            "ORDER BY accessed_at DESC LIMIT ? OFFSET ?",
+            (device_id, limit, offset),
+        ).fetchall()
+    return templates.TemplateResponse(request, "youtube_history.html", {
+        "entries": entries, "page": page,
+    })
+
+
+@app.post("/youtube/history/{entry_id}/delete")
+def delete_history_entry(entry_id: int, request: Request, response: Response):
+    device_id = _get_or_set_device_id(request, response)
+    with db_session() as conn:
+        # Scoped to device_id, not just id — a device can only delete its
+        # own entries, not anyone else's by guessing a row id.
+        cur = conn.execute(
+            "DELETE FROM user_history WHERE id = ? AND device_id = ?",
+            (entry_id, device_id),
+        )
+    if cur.rowcount == 0:
+        raise HTTPException(404, "entry not found for this device")
+    return {"ok": True}
+
+
+@app.post("/youtube/history/clear")
+def clear_history(request: Request, response: Response):
+    device_id = _get_or_set_device_id(request, response)
+    with db_session() as conn:
+        cur = conn.execute("DELETE FROM user_history WHERE device_id = ?", (device_id,))
+    return {"ok": True, "deleted": cur.rowcount}
 
 # ---------------------------------------------------------------- save toggle (shared)
 
