@@ -71,7 +71,7 @@ def _prune(conn) -> dict:
     
     # 1. Ephemeral Content (News/RSS) -> 7 Day TTL
     cur_rss = conn.execute(
-        "DELETE FROM rss_cache WHERE published_date < date('now', '-7 days') AND is_saved = 0"
+        "DELETE FROM rss_cache WHERE published_date < date('now', '-1 days') AND is_saved = 0"
     )
     counts["rss_cache"] = cur_rss.rowcount
     
