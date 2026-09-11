@@ -16,6 +16,31 @@
   ],
   "papers": [
     {"name": "arXiv — Fluid Dynamics", "url": "http://export.arxiv.org/rss/physics.flu-dyn"},
-    {"name": "Nature — Earth Sciences", "url": "https://www.nature.com/subjects/earth-sciences/nature.rss"}
+    
+    {"name": "Nature — Earth Sciences", "url": "https://www.nature.com/subjects/earth-sciences/nature.rss"},
+    {
+      "name": "Water Resources Research",
+      "url": "https://agupubs.onlinelibrary.wiley.com/feed/19447973/most-recent"
+    },
+    {
+      "name": "Journal of Hydrology",
+      "url": "https://rss.sciencedirect.com/publication/science/00221694"
+    },
+    {
+      "name": "Advances in Water Resources",
+      "url": "https://rss.sciencedirect.com/publication/science/03091708"
+    },
+    {
+      "name": "Journal of Water Resources Planning & Management",
+      "url": "https://ascelibrary.org/action/showFeed?type=etoc&feed=rss&jc=jwrmd5"
+    },
+    {
+      "name": "Earth Surface Processes and Landforms",
+      "url": "https://onlinelibrary.wiley.com/feed/10969837/most-recent"
+    },
+    {
+      "name": "Hydrology & Earth System Sciences",
+      "url": "https://hess.copernicus.org/xml/rss2_0.xml"
+    }
   ]
 }
