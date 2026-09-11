@@ -52,6 +52,15 @@ def run_cycle() -> dict:
         except Exception as e:
             summary["errors"].append(f"papers:{feed.get('name')}: {e}")
 
+    for feed in sources.get("blogs", []):
+        try:
+         with db_session() as conn:
+            summary["blogs"] = summary.get("blogs", 0) + generic_rss.ingest_feed(
+                conn, feed["url"], feed["name"], "Blog"
+            )
+        except Exception as e:
+          summary["errors"].append(f"blogs:{feed.get('name')}: {e}")
+
     # Isolate pruning and logging
     with db_session() as conn:
         summary["pruned"] = _prune(conn)
@@ -69,13 +78,18 @@ def _prune(conn) -> dict:
     """Applies segmented TTLs based on content velocity."""
     counts = {}
     
-    # 1. Ephemeral Content (News/RSS) -> 7 Day TTL
-    cur_rss = conn.execute(
-        "DELETE FROM rss_cache WHERE published_date < date('now', '-1 days') AND is_saved = 0"
+    # 1. Ephemeral Content (News ONLY) -> 1 Day TTL
+    cur_news = conn.execute(
+        "DELETE FROM rss_cache WHERE module_type = 'News' AND published_date < date('now', '-1 days') AND is_saved = 0"
     )
-    counts["rss_cache"] = cur_rss.rowcount
     
-    # 2. Evergreen Archive -> 365 Day TTL
+    # 2. Evergreen RSS Content (Blogs & Papers) -> 365 Day TTL
+    cur_rss_evergreen = conn.execute(
+        "DELETE FROM rss_cache WHERE module_type IN ('Paper', 'Blog') AND published_date < date('now', '-365 days') AND is_saved = 0"
+    )
+    counts["rss_cache"] = cur_news.rowcount + cur_rss_evergreen.rowcount
+    
+    # 3. Evergreen Archive -> 365 Day TTL
     cur_yt = conn.execute(
         "DELETE FROM youtube_cache WHERE published_date < date('now', '-365 days') AND is_saved = 0"
     )

@@ -42,5 +42,41 @@
       "name": "Hydrology & Earth System Sciences",
       "url": "https://hess.copernicus.org/xml/rss2_0.xml"
     }
+  ],
+  
+  "blogs": [
+    {
+      "name": "Gowers's Weblog (Timothy Gowers)",
+      "url": "https://gowers.wordpress.com/feed/"
+    },
+    {
+      "name": "Dan Luu",
+      "url": "https://danluu.com/atom.xml"
+    },
+    {
+      "name": "Simon Willison's Weblog",
+      "url": "https://simonwillison.net/atom/entries/"
+    },
+    {
+      "name": "Gwern Branwen",
+      "url": "https://gwern.net/atom.xml"
+    },
+    {
+      "name": "Stephen Wolfram Writings",
+      "url": "https://writings.stephenwolfram.com/feed/"
+    },
+    {
+      "name": "Derek Sivers",
+      "url": "https://sive.rs/feed.xml"
+    },
+    {
+      "name": "Idle Words (Maciej Cegłowski)",
+      "url": "https://idlewords.com/index.xml"
+    },
+    {
+      "name": "Ribbonfarm (Venkatesh Rao)",
+      "url": "https://ribbonfarm.com/feed/"
+    }
   ]
+
 }

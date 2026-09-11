@@ -255,7 +255,8 @@ def substack_feed(request: Request, page: int = 1):
 
 NEWS_TABS = {
     "country": ["Daily_Star", "Prothom Alo","The Business Standard"],
-    "international": ["Al Jazeera"]
+    "international": ["Al Jazeera"],
+    
 }
 
 def _feed_page(request: Request, module_type: str, page: int):
@@ -303,8 +304,29 @@ def news_feed(request: Request, tab: str = "country", page: int = 1):
     })
 
 @app.get("/papers", response_class=HTMLResponse)
-def papers_feed(request: Request, page: int = 1):
-    return _feed_page(request, "Paper", page)
+def library_feed(request: Request, tab: str = "Journals", page: int = 1):
+    # Map UI tabs directly to database module types
+    VALID_TABS = {"Journals": "Paper", "Blogs": "Blog"}
+    
+    if tab not in VALID_TABS:
+        tab = "Journals"
+        
+    limit, offset = 40, (page - 1) * 40
+    target_module = VALID_TABS[tab]
+    
+    with db_session() as conn:
+        items = conn.execute(
+            "SELECT * FROM rss_cache WHERE module_type = ? ORDER BY published_date DESC LIMIT ? OFFSET ?",
+            (target_module, limit, offset)
+        ).fetchall()
+        
+    return templates.TemplateResponse(request, "feed.html", {
+        "items": items, "page": page,
+        "module_name": "Library",
+        "module_slug": "papers",
+        "tabs": list(VALID_TABS.keys()),
+        "active_tab": tab,
+    })
 
 # ---------------------------------------------------------------- admin
 
