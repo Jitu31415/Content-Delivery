@@ -9,7 +9,7 @@
     "erinmerylstudy","ummahelevated","hasifcore","jeevanjyoti4","themazaj"
   ],
   "news": [
-    {"name": "Daily_Star", "url": "https://www.thedailystar.net/rss"},
+    {"name": "Daily_Star", "url": "https://www.thedailystar.net/frontpage/rss.xml"},
     {"name":"Prothom Alo", "url": "https://en.prothomalo.com/feed/"},
     {"name":"The Business Standard", "url": "https://www.tbsnews.net/rss.xml"},
     {"name":"Al Jazeera", "url": "https://www.aljazeera.com/xml/rss/all.xml"}
