@@ -1,23 +1,74 @@
 {
   "youtube": {
-    "scientific": ["UCbfYPyITQ-7l4upoX8nvctg","UCHnyfMqiRRG1u-2MsSQLbXA","UCm5mt-A4w61lknZ9lCsZtBw","UCMOqf8ab-42UUQIdVoKwjlQ","UCYO_jab_esuFRV4b17AJtAw","UCUHW94eEFW7hkUMVaZz4eDg","UConVfxXodg78Tzh5nNu85Ew","UCvBqzzvUBLCs8Y7Axb-jZew"],
-    "music_poetry": ["UCQjBsscIa_mgEnSvWpm_9vw","UCafEZMU5s8geb9oIly6xTrg","UCrojXw0U5-rrBg8nqiltUvQ","UCcPPUszZ4-7yzZNgAAYwJjg","UCb9cLl0z3S-gipPiSMg8CQw","UC4VK4LX8hbTjgdAipl0cHhw"],
-    "podcast": ["UCWJPKXhkcMGXafdtqGx1mEw","UCGq-a57w-aPwyi3pW7XLiHw","UCpjlh0e319ksmoOD7bQFSiw","UCAuUUnT6oDeKwE6v1NGQxug","UCnxuOd8obvLLtf5_-YKFbiQ","UCvQECJukTDE2i6aCoMnS-Vg"],
-    "religious": ["UCRtiU-lpcBSi-ipFKyfIkug","UCmBeDLS33OmwgiuhWPtwlyQ","UCD8N8HjsCkCmykfPnVleVRg","UCHOPQpxRV0esIJ0UrniZ7CQ","UC3vHW2h22WE-pNi5WJtRIjg"]
+    "scientific": [
+      "UCbfYPyITQ-7l4upoX8nvctg",
+      "UCHnyfMqiRRG1u-2MsSQLbXA",
+      "UCm5mt-A4w61lknZ9lCsZtBw",
+      "UCMOqf8ab-42UUQIdVoKwjlQ",
+      "UCYO_jab_esuFRV4b17AJtAw",
+      "UCUHW94eEFW7hkUMVaZz4eDg",
+      "UConVfxXodg78Tzh5nNu85Ew",
+      "UCvBqzzvUBLCs8Y7Axb-jZew"
+    ],
+    "music_poetry": [
+      "UCQjBsscIa_mgEnSvWpm_9vw",
+      "UCafEZMU5s8geb9oIly6xTrg",
+      "UCrojXw0U5-rrBg8nqiltUvQ",
+      "UCcPPUszZ4-7yzZNgAAYwJjg",
+      "UCb9cLl0z3S-gipPiSMg8CQw",
+      "UC4VK4LX8hbTjgdAipl0cHhw"
+    ],
+    "podcast": [
+      "UCWJPKXhkcMGXafdtqGx1mEw",
+      "UCGq-a57w-aPwyi3pW7XLiHw",
+      "UCpjlh0e319ksmoOD7bQFSiw",
+      "UCAuUUnT6oDeKwE6v1NGQxug",
+      "UCnxuOd8obvLLtf5_-YKFbiQ",
+      "UCvQECJukTDE2i6aCoMnS-Vg"
+    ],
+    "religious": [
+      "UCRtiU-lpcBSi-ipFKyfIkug",
+      "UCmBeDLS33OmwgiuhWPtwlyQ",
+      "UCD8N8HjsCkCmykfPnVleVRg",
+      "UCHOPQpxRV0esIJ0UrniZ7CQ",
+      "UC3vHW2h22WE-pNi5WJtRIjg"
+    ]
   },
   "substack": [
-    "erinmerylstudy","ummahelevated","hasifcore","jeevanjyoti4","themazaj"
+    "erinmerylstudy",
+    "ummahelevated",
+    "hasifcore",
+    "jeevanjyoti4",
+    "themazaj",
+    "henrikkarlsson.xyz"
   ],
   "news": [
-    {"name": "Daily_Star", "url": "https://www.thedailystar.net/frontpage/rss.xml"},
-    {"name":"Prothom Alo", "url": "https://en.prothomalo.com/feed/"},
-    {"name":"The Business Standard", "url": "https://www.tbsnews.net/rss.xml"},
-    {"name":"Al Jazeera", "url": "https://www.aljazeera.com/xml/rss/all.xml"}
+    {
+      "name": "Daily_Star",
+      "url": "https://www.thedailystar.net/frontpage/rss.xml"
+    },
+    {
+      "name": "Prothom Alo",
+      "url": "https://en.prothomalo.com/feed/"
+    },
+    {
+      "name": "The Business Standard",
+      "url": "https://www.tbsnews.net/rss.xml"
+    },
+    {
+      "name": "Al Jazeera",
+      "url": "https://www.aljazeera.com/xml/rss/all.xml"
+    }
   ],
   "papers": [
-    {"name": "arXiv — Fluid Dynamics", "url": "http://export.arxiv.org/rss/physics.flu-dyn"},
-    
-    {"name": "Nature — Earth Sciences", "url": "https://www.nature.com/subjects/earth-sciences/nature.rss"},
+    {
+      "name": "arXiv — Fluid Dynamics",
+      "url": "http://export.arxiv.org/rss/physics.flu-dyn"
+    },
+    {
+      "name": "Nature — Earth Sciences",
+      "url": "https://www.nature.com/subjects/earth-sciences/nature.rss"
+    },
     {
       "name": "Water Resources Research",
       "url": "https://agupubs.onlinelibrary.wiley.com/feed/19447973/most-recent"
@@ -43,7 +94,6 @@
       "url": "https://hess.copernicus.org/xml/rss2_0.xml"
     }
   ],
-  
   "blogs": [
     {
       "name": "Gowers's Weblog (Timothy Gowers)",
@@ -76,7 +126,38 @@
     {
       "name": "Ribbonfarm (Venkatesh Rao)",
       "url": "https://ribbonfarm.com/feed/"
+    },
+    {
+      "name": "The Marginalian",
+      "url": "https://www.themarginalian.org/feed/"
+    },
+    {
+      "name": "Aeon",
+      "url": "https://aeon.co/feed.rss"
+    },
+    {
+      "name": "Psyche",
+      "url": "https://psyche.co/feed"
+    },
+    {
+      "name": "Minding Our Way",
+      "url": "https://mindingourway.com/feed/"
+    },
+    {
+      "name": "Wait But Why",
+      "url": "https://waitbutwhy.com/feed"
+    },
+    {
+      "name": "Raptitude",
+      "url": "https://www.raptitude.com/feed/"
+    },
+    {
+      "name": "Joe Carlsmith",
+      "url": "https://joecarlsmith.com/rss.xml"
+    },
+    {
+      "name": "The Technium",
+      "url": "https://kk.org/thetechnium/feed/"
     }
   ]
-
 }
