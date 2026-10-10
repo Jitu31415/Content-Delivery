@@ -1,7 +1,7 @@
 """
 Two families of function here:
 
-1. ingest_channel() — reads each whitelisted channel's native video RSS feed
+1. fetch_channel_feed() + store_videos() — read each whitelisted channel's native video RSS feed
    (youtube.com/feeds/videos.xml). Free, no API key, no rate limit exposure.
    This is the primary path that fills youtube_cache for the categorized tabs.
    Unaffected by anything below — the category tabs are whitelist-driven,
@@ -23,7 +23,7 @@ import feedparser
 import httpx
 
 from app.extractors import edu_filter
-from app.utils import normalize_date
+from app.utils import insert_or_ignore_many, normalize_date
 
 try:
     from googleapiclient.discovery import build as build_youtube_service
@@ -47,49 +47,74 @@ def _parse_iso8601_duration(duration: str) -> int | None:
     return hours * 3600 + minutes * 60 + seconds
 
 
-def fetch_channel_feed(channel_id: str) -> list[dict]:
+_FEED_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+}
+
+
+def _is_short(client: httpx.Client, video_id: str) -> bool:
+    """HEAD /shorts/<id>: YouTube answers 200 for a Short and redirects (303)
+    for a regular video, hence follow_redirects=False on the client. Fails
+    open: if the network drops, treat it as a normal video rather than lose it."""
+    try:
+        return client.head(f"https://www.youtube.com/shorts/{video_id}").status_code == 200
+    except httpx.HTTPError:
+        return False
+
+
+def fetch_channel_feed(channel_id: str, known_ids=frozenset()) -> tuple[list[dict], list[str]]:
+    """Network + parse only; no database connection is involved.
+
+    Returns (videos, short_ids), covering ONLY entries whose id is not in
+    `known_ids`. The caller passes every id already stored in youtube_cache
+    or youtube_skip, so the Shorts probe (one HEAD request each) runs once
+    per video ever, not once per entry per cycle.
+
+    Raises on HTTP errors, so a dead or mistyped channel id shows up in the
+    worker summary instead of silently yielding an empty feed."""
     url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
-    parsed = feedparser.parse(url)
-    videos = []
-    
-    # Use a persistent client session to pool connections per feed
+    resp = httpx.get(url, headers=_FEED_HEADERS, timeout=10.0, follow_redirects=True)
+    resp.raise_for_status()
+    parsed = feedparser.parse(resp.content)
+    channel_name = parsed.feed.get("title", "Unknown channel")
+
+    videos, shorts = [], []
     with httpx.Client(timeout=5.0, follow_redirects=False) as client:
         for entry in parsed.entries:
             video_id = entry.get("yt_videoid") or entry.get("id", "").split(":")[-1]
-            
-            try:
-                # Probe the Shorts endpoint using a HEAD request to minimize bandwidth
-                resp = client.head(f"https://www.youtube.com/shorts/{video_id}")
-                if resp.status_code == 200:
-                    continue  # Format is a Short; bypass insertion
-            except httpx.HTTPError:
-                pass  # Fail open: if network drops, assume standard video to prevent data loss
-                
+            if not video_id or video_id in known_ids:
+                continue
+            # If the feed already links a Short via /shorts/, no probe is needed;
+            # otherwise fall back to the HEAD probe.
+            if "/shorts/" in entry.get("link", "") or _is_short(client, video_id):
+                shorts.append(video_id)
+                continue
             thumbs = entry.get("media_thumbnail") or []
             videos.append({
                 "video_id": video_id,
-                "channel_name": parsed.feed.get("title", "Unknown channel"),
+                "channel_name": channel_name,
                 "title": entry.get("title", "Untitled"),
                 "published_date": normalize_date(entry.get("published_parsed")),
                 "thumbnail_url": thumbs[0].get("url", "") if thumbs else "",
             })
-            
-    return videos
+    return videos, shorts
 
 
-def ingest_channel(conn, channel_id: str, category: str) -> int:
-    videos = fetch_channel_feed(channel_id)
-    inserted = 0
-    for v in videos:
-        cur = conn.execute(
-            "INSERT OR IGNORE INTO youtube_cache "
-            "(video_id, channel_name, title, category, published_date, thumbnail_url) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (v["video_id"], v["channel_name"], v["title"], category,
-             v["published_date"], v["thumbnail_url"]),
-        )
-        inserted += cur.rowcount
-    return inserted
+def store_videos(conn, videos: list[dict], short_ids: list[str], category: str) -> int:
+    """DB only. `videos` are already known to be new (see fetch_channel_feed),
+    so no diff query is needed. Returns the number of rows submitted."""
+    insert_or_ignore_many(
+        conn, "youtube_cache",
+        ("video_id", "channel_name", "title", "category", "published_date", "thumbnail_url"),
+        [(v["video_id"], v["channel_name"], v["title"], category,
+          v["published_date"], v["thumbnail_url"]) for v in videos],
+    )
+    seen_at = datetime.now(timezone.utc).isoformat()
+    insert_or_ignore_many(
+        conn, "youtube_skip", ("video_id", "seen_at"),
+        [(sid, seen_at) for sid in short_ids],
+    )
+    return len(videos)
 
 
 # ==========================================================================

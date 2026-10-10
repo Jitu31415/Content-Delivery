@@ -9,6 +9,14 @@ from contextlib import contextmanager
 TURSO_DATABASE_URL = os.getenv("TURSO_DATABASE_URL")
 TURSO_AUTH_TOKEN = os.getenv("TURSO_AUTH_TOKEN")
 
+# Bump this whenever init_db()'s DDL, migrations or indexes change. init_db()
+# is skipped entirely (two cheap statements) when the stored version matches,
+# because on Turso the schema persists across container restarts and
+# re-running ~20 remote DDL statements on every cold start delays port
+# binding (uvicorn does not listen until lifespan startup returns).
+SCHEMA_VERSION = 1
+
+
 def dict_factory(cursor, row):
     fields = [column[0] for column in cursor.description]
     return {key: value for key, value in zip(fields, row)}
@@ -16,42 +24,44 @@ def dict_factory(cursor, row):
 class TursoDictCursor:
     def __init__(self, cursor):
         self.cursor = cursor
-        
+
     @property
     def rowcount(self):
         """Exposes the number of rows modified by the last query."""
         return getattr(self.cursor, 'rowcount', -1)
-        
+
     def fetchone(self):
         row = self.cursor.fetchone()
         return dict_factory(self.cursor, row) if row else None
-        
+
     def fetchall(self):
         return [dict_factory(self.cursor, row) for row in self.cursor.fetchall()]
 
 class TursoDictConnection:
     def __init__(self, conn):
         self.conn = conn
-        
+
     def execute(self, query, params=None):
         if params is None:
             return TursoDictCursor(self.conn.execute(query))
         return TursoDictCursor(self.conn.execute(query, params))
-        
+
     def executemany(self, query, seq_of_params):
-        """Bypasses remote bulk-insert driver bugs by forcing iterative atomic executions."""
+        """Bypasses remote bulk-insert driver bugs by forcing iterative atomic executions.
+        Prefer app.utils.insert_or_ignore_many() for inserts: it sends one
+        multi-row statement per chunk instead of one round trip per row."""
         for params in seq_of_params:
             self.conn.execute(query, params)
-            
+
     def commit(self):
         self.conn.commit()
-        
+
     def close(self):
         self.conn.close()
-        
+
     def __enter__(self):
         return self
-        
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         if exc_type is None:
             self.commit()
@@ -65,7 +75,7 @@ def db_session():
     else:
         conn = sqlite3.connect("app.db")
         conn.row_factory = dict_factory
-        
+
     try:
         yield conn
         conn.commit()
@@ -90,19 +100,27 @@ def _ensure_columns(conn, table, column_defs):
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
 
 
+def _schema_is_current(conn) -> bool:
+    row = conn.execute("SELECT val FROM system_state WHERE key = 'schema_version'").fetchone()
+    return bool(row) and row["val"] == str(SCHEMA_VERSION)
+
+
 def init_db():
-    """Forces schema creation on the stateless container."""
+    """Creates/migrates the schema, unless the stored schema_version already
+    matches SCHEMA_VERSION, in which case it returns after two statements."""
     with db_session() as conn:
         conn.execute("CREATE TABLE IF NOT EXISTS system_state (key TEXT UNIQUE, val TEXT)")
-        
+        if _schema_is_current(conn):
+            return
+
         conn.execute("""
             CREATE TABLE IF NOT EXISTS rss_cache (
-                item_id TEXT PRIMARY KEY, module_type TEXT, 
-                source_name TEXT, published_date TEXT, 
+                item_id TEXT PRIMARY KEY, module_type TEXT,
+                source_name TEXT, published_date TEXT,
                 url TEXT, title TEXT, is_saved INTEGER DEFAULT 0
             )
         """)
-        
+
         conn.execute("""
             CREATE TABLE IF NOT EXISTS youtube_cache (
                 video_id TEXT PRIMARY KEY, title TEXT,
@@ -110,7 +128,7 @@ def init_db():
                 thumbnail_url TEXT, is_saved INTEGER DEFAULT 0
             )
         """)
-        # thumbnail_url was missing above — youtube.py's ingest_channel() has
+        # thumbnail_url was missing above — youtube.py's ingestion has
         # always inserted into it. That's the actual populate failure: every
         # INSERT OR IGNORE into youtube_cache raised "table youtube_cache has
         # no column named thumbnail_url" and was silently swallowed by
@@ -125,15 +143,15 @@ def init_db():
             )
         """)
         # Same bug, same shape: content_html and url were missing — every
-        # insert from substack.py's ingest_author() failed identically.
+        # insert from substack.py failed identically.
 
         conn.execute("""
             CREATE TABLE IF NOT EXISTS user_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT, video_id TEXT, 
+                id INTEGER PRIMARY KEY AUTOINCREMENT, video_id TEXT,
                 title TEXT, accessed_at TEXT
             )
         """)
-        
+
         conn.execute("""
             CREATE TABLE IF NOT EXISTS worker_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -154,18 +172,41 @@ def init_db():
         # unconditionally, so /youtube/search would fail with "no such
         # table: search_cache" the moment someone used the search bar. Same
         # class of bug as the two above: schema drifted behind the code that
-        # depends on it. Fixed here before it became your next support ticket.
+        # depends on it.
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS youtube_skip (
+                video_id TEXT PRIMARY KEY, seen_at TEXT
+            )
+        """)
+        # Verdict cache for the Shorts probe: ids that were identified as
+        # Shorts and deliberately not stored in youtube_cache. Without it,
+        # every Short in a channel's feed would be re-probed every cycle
+        # because it never appears in youtube_cache.
 
         # --- migration pass: reconciles tables that already existed before
-        # this fix, on your live Turso database, with a schema that had
-        # already drifted out from under them. This is the step that
-        # actually matters for your current database's state.
+        # these fixes, on your live Turso database, with a schema that had
+        # already drifted out from under them.
         _ensure_columns(conn, "youtube_cache", [("thumbnail_url", "TEXT")])
         _ensure_columns(conn, "substack_cache", [("content_html", "TEXT"), ("url", "TEXT")])
         _ensure_columns(conn, "user_history", [("device_id", "TEXT")])
-        # New: per-device history scoping. Existing rows predate this column
-        # and get NULL — they won't match any real device_id filter, so they
-        # won't appear in the new per-device history tab. There's no way to
+        # Per-device history scoping. Existing rows predate this column and
+        # get NULL — they won't match any real device_id filter, so they
+        # won't appear in the per-device history tab. There's no way to
         # retroactively attribute old entries to a device that was never
-        # recorded, so this is the honest outcome, not a bug — old entries
-        # aren't silently reassigned to whichever device happens to load next.
+        # recorded, so this is the honest outcome, not a bug.
+
+        # --- indexes: every list page is "WHERE <key> ORDER BY published_date
+        # DESC LIMIT n", which without these is a full scan plus a sort.
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_yt_cat_date ON youtube_cache(category, published_date DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_rss_mod_date ON rss_cache(module_type, published_date DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_sub_date ON substack_cache(published_date DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_hist_dev ON user_history(device_id, accessed_at DESC)")
+
+        # Written last, inside the same session: a failure above leaves the
+        # version unset, so the next start retries the whole pass.
+        conn.execute(
+            "INSERT INTO system_state (key, val) VALUES ('schema_version', ?) "
+            "ON CONFLICT(key) DO UPDATE SET val = excluded.val",
+            (str(SCHEMA_VERSION),),
+        )

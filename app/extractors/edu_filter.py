@@ -11,9 +11,10 @@ mis-tagged as Education, or a channel gaming the query text) is still
 caught by the other.
 
 Two-tier design:
-- HARD_EXCLUDE: near-certain non-educational signals. A single match in
-  title or description disqualifies the item outright, regardless of
-  category tag or query relevance.
+- HARD_EXCLUDE: near-certain non-educational signals. A single whole-word
+  match in the TITLE disqualifies the item outright, regardless of category
+  tag or query relevance. (Descriptions are not checked: they carry channel
+  boilerplate that produces false exclusions.)
 - Positive/soft-negative keyword lists: adjust a ranking score used to
   sort survivors, not to disqualify them. An item with no positive
   keyword match is not excluded on that basis alone — the search query
@@ -26,6 +27,8 @@ Duration is a hard signal where available: anything under 90 seconds is
 excluded outright as a near-certain Shorts/clip, regardless of text
 content — no legitimate lecture runs 90 seconds.
 """
+
+import re
 
 HARD_EXCLUDE_KEYWORDS = [
     "official music video", "official video", "music video", "lyric video",
@@ -57,6 +60,23 @@ POSITIVE_CHANNEL_MARKERS = [
 SHORTS_DURATION_CUTOFF_SECONDS = 90
 
 
+def _compile(keywords: list[str]) -> list[re.Pattern]:
+    """Whole-word (plus optional plural 's') matchers. Plain substring tests
+    misfire on short tokens: "clip" matched "eclipse", "mit" matched
+    "Smithsonian"/"Summit", "meme" matched "memetics". Leading/trailing
+    spaces in the keyword lists (e.g. " lyrics") are redundant here."""
+    return [
+        re.compile(r"(?<!\w)" + re.escape(kw.strip()) + r"s?(?!\w)", re.IGNORECASE)
+        for kw in keywords
+    ]
+
+
+_HARD_EXCLUDE = _compile(HARD_EXCLUDE_KEYWORDS)
+_SOFT_NEGATIVE = _compile(SOFT_NEGATIVE_KEYWORDS)
+_POSITIVE = _compile(POSITIVE_KEYWORDS)
+_CHANNEL_MARKERS = _compile(POSITIVE_CHANNEL_MARKERS)
+
+
 def evaluate(title: str, description: str = "", channel: str = "",
              duration_seconds: int | None = None) -> tuple[bool, int]:
     """Returns (keep, score). keep=False means hard-excluded — drop the
@@ -66,22 +86,25 @@ def evaluate(title: str, description: str = "", channel: str = "",
     if duration_seconds is not None and duration_seconds < SHORTS_DURATION_CUTOFF_SECONDS:
         return False, 0
 
-    text = f"{title} {description}".lower()
-    for kw in HARD_EXCLUDE_KEYWORDS:
-        if kw in text:
+    # Hard exclusion looks at the TITLE only. Descriptions routinely carry
+    # channel boilerplate ("subscribe to my vlog", "lyrics in the comments")
+    # that is unrelated to what the video is, and one match is disqualifying.
+    for pattern in _HARD_EXCLUDE:
+        if pattern.search(title):
             return False, 0
 
+    text = f"{title} {description}"
     score = 0
-    for kw in POSITIVE_KEYWORDS:
-        if kw in text:
+    for pattern in _POSITIVE:
+        if pattern.search(text):
             score += 1
-    for kw in SOFT_NEGATIVE_KEYWORDS:
-        if kw in text:
+    for pattern in _SOFT_NEGATIVE:
+        if pattern.search(text):
             score -= 1
 
-    channel_lower = (channel or "").lower()
-    for marker in POSITIVE_CHANNEL_MARKERS:
-        if marker in channel_lower:
+    channel_text = channel or ""
+    for pattern in _CHANNEL_MARKERS:
+        if pattern.search(channel_text):
             score += 2
             break  # one channel-level boost is enough signal; don't stack
 

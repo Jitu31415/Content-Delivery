@@ -2,19 +2,23 @@ import json
 import os
 from pathlib import Path
 
+from app.database import db_session
+
 BASE_DIR = Path(__file__).parent.parent
 SOURCES_PATH = BASE_DIR / "sources.json"
-SECRETS_PATH = BASE_DIR / "data" / "secrets.json"
 
 # Public Invidious instances rotate and die frequently. This default list
 # will go stale — before relying on search, check https://api.invidious.io/
 # for currently healthy instances and override via INVIDIOUS_INSTANCES in .env.
+# (vid.puffyan.us was removed: that instance is no longer operating, so every
+# search without a working API key paid its full timeout before moving on.)
 DEFAULT_INVIDIOUS_INSTANCES = [
-    "https://vid.puffyan.us",
     "https://invidious.privacyredirect.com",
     "https://yewtu.be",
     "https://inv.nadeko.net",
 ]
+
+_COOKIE_KEY = "substack_cookie"
 
 
 def load_sources() -> dict:
@@ -22,30 +26,31 @@ def load_sources() -> dict:
         return json.load(f)
 
 
-def _load_secrets() -> dict:
-    if SECRETS_PATH.exists():
-        with open(SECRETS_PATH) as f:
-            return json.load(f)
-    return {}
-
-
-def _save_secrets(data: dict) -> None:
-    SECRETS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(SECRETS_PATH, "w") as f:
-        json.dump(data, f)
-
-
 def get_substack_cookie() -> str:
-    """File-backed value takes precedence — this is what the admin endpoint
-    updates at runtime without a server restart (Phase 2 correction)."""
-    secrets = _load_secrets()
-    return secrets.get("substack_cookie") or os.environ.get("SUBSTACK_COOKIE", "")
+    """The database-backed value takes precedence — this is what the admin
+    endpoint updates at runtime without a server restart. It lives in the
+    database rather than a file because the container's disk is ephemeral:
+    a file written by the admin endpoint is gone after every deploy or
+    respawn, silently reverting to the (possibly expired) env value."""
+    try:
+        with db_session() as conn:
+            row = conn.execute(
+                "SELECT val FROM system_state WHERE key = ?", (_COOKIE_KEY,)
+            ).fetchone()
+        if row and row["val"]:
+            return row["val"]
+    except Exception:
+        pass  # DB unreachable: fall back to the env value rather than fail ingestion
+    return os.environ.get("SUBSTACK_COOKIE", "")
 
 
 def set_substack_cookie(value: str) -> None:
-    secrets = _load_secrets()
-    secrets["substack_cookie"] = value
-    _save_secrets(secrets)
+    with db_session() as conn:
+        conn.execute(
+            "INSERT INTO system_state (key, val) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET val = excluded.val",
+            (_COOKIE_KEY, value),
+        )
 
 
 def get_admin_token() -> str:
