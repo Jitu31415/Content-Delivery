@@ -20,7 +20,7 @@ def ingest_feed(conn, feed_url: str, source_name: str, module_type: str) -> int:
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
     }
-    response = requests.get(feed_url, headers=headers, timeout=15)
+    response = requests.get(feed_url, headers=headers, timeout=5)
     response.raise_for_status()
     
     feed = feedparser.parse(response.content)
