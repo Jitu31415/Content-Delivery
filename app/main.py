@@ -1,8 +1,10 @@
 import os
 import secrets
+from collections import Counter
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
@@ -15,6 +17,8 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from app import config, worker
+from app import reader
+from app.sandbox import SandboxMiddleware
 from app.database import db_session, init_db
 from app.extractors import youtube as youtube_extractor
 
@@ -68,6 +72,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Content Aggregator", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+
+# Closed-world sandbox: neutralises external links/forms/iframes in every HTML
+# response and sends a sandboxing CSP. See app/sandbox.py. SANDBOX_MODE=off
+# disables it (e.g. for debugging in a desktop browser).
+app.add_middleware(SandboxMiddleware)
 
 # ---------------------------------------------------------------- auth helper
 
@@ -385,6 +394,18 @@ def library_feed(request: Request, tab: str = "Journals", page: int = 1):
         "active_tab": tab,
     })
 
+# ---------------------------------------------------------------- reader (allowlisted)
+
+@app.get("/read", response_class=HTMLResponse)
+def read_article(u: str = "", full: bool = False):
+    """Stripped-down view of an article from one of the configured sources.
+    Sync `def`: the fetch is blocking network I/O and must not run on the
+    event loop. See app/reader.py for the allowlist and proxy hardening."""
+    try:
+        return HTMLResponse(reader.read(u, full))
+    except reader.ReaderError as e:
+        return HTMLResponse(reader.error_page(e), status_code=e.status)
+
 # ---------------------------------------------------------------- admin
 
 def _check_admin(x_admin_token: str) -> None:
@@ -405,3 +426,29 @@ async def update_substack_cookie(request: Request, x_admin_token: str = Header(d
 def trigger_worker(x_admin_token: str = Header(default="")):
     _check_admin(x_admin_token)
     return worker.run_cycle()
+
+@app.get("/admin/reader-hosts")
+def reader_hosts_report(x_admin_token: str = Header(default="")):
+    """Which hosts the reader may open, and which hosts your stored items
+    point at that it may not. Review before adding anything to "reader_hosts"
+    in sources.json: item URLs come from feeds, so a host appearing here is
+    not evidence that it is trustworthy (feed redirectors and video sites show
+    up too)."""
+    _check_admin(x_admin_token)
+    allowed = reader.allowed_hosts()
+    seen, example = Counter(), {}
+    with db_session() as conn:
+        rows = conn.execute("SELECT url FROM rss_cache").fetchall()
+        rows += conn.execute("SELECT url FROM substack_cache").fetchall()
+    for row in rows:
+        url = row.get("url") or ""
+        host = (urlsplit(url).hostname or "").lower()
+        if host and not reader.host_allowed(host, allowed):
+            seen[host] += 1
+            example.setdefault(host, url)
+    return {
+        "allowed": sorted(allowed),
+        "seen_but_not_allowed": [
+            {"host": h, "items": n, "example": example[h]} for h, n in seen.most_common()
+        ],
+    }
