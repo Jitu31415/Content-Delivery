@@ -76,7 +76,8 @@ def derive_hosts(sources: dict, extra=()) -> frozenset:
         for feed in sources.get(key) or []:
             add(urlsplit(feed.get("url", "")).hostname)
     for author in sources.get("substack") or []:
-        add(f"{author}.substack.com")
+        clean = author.strip("/")
+        add(clean if "." in clean else f"{clean}.substack.com")
     for h in sources.get("reader_hosts") or []:
         add(h)
     for h in extra:
