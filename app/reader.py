@@ -20,6 +20,17 @@ would let any feed allowlist youtube.com or a redirector by linking to it. Use
 /admin/reader-hosts to review which hosts your items point at, then add the
 ones you trust to "reader_hosts".
 
+Trimming (READER_TRIM env var, default "light"):
+  light   Generous. Removes only high-confidence junk: ad containers and ad
+          labels, cookie/consent/modal overlays, tracking images, a few
+          stand-alone labels ("Share", "Tweet"), and "The post X appeared first
+          on Y"/copyright lines. Keeps everything else, including link lists,
+          asides, footers and collapsed sections inside the article.
+  strict  Aggressive. Also removes related/share/comment/newsletter blocks by
+          class name, link-dense blocks, hidden and aria-hidden elements,
+          call-to-action lines, and any <nav>/<aside>/<footer>.
+The "Full page" view is a third, separate mode: the whole page, minus ads.
+
 This is an unauthenticated endpoint, so it is hardened as a proxy:
   * only http(s), default ports, no credentials, no IP literals;
   * every hop of every redirect is re-checked against the allowlist;
@@ -232,6 +243,18 @@ _NOISE_TOKENS = _AD_TOKENS | {
     "comment", "cookie", "cookies", "consent", "gdpr", "popup", "modal", "sidebar", "breadcrumb",
     "breadcrumbs", "widget", "widgets", "donate", "donation", "toolbar", "skip", "print",
 }
+# "light" trimming: only things that are junk on essentially every page.
+_OVERLAY_TOKENS = {"cookie", "cookies", "consent", "gdpr", "popup", "modal"}
+_LIGHT_TOKENS = _AD_TOKENS | _OVERLAY_TOKENS
+_LIGHT_ROLES = {"dialog", "alertdialog"}
+_AD_SRC_LIGHT = re.compile(r"doubleclick|googlesyndication|adservice|adsystem|scorecardresearch|"
+                           r"facebook\.com/tr|outbrain|taboola", re.I)
+_AD_ALT_LIGHT = {"advertisement", "advert", "ad", "sponsored"}
+_LIGHT_LABEL = re.compile(
+    r"^(sponsored by .{1,40}|share( this( article| story| post| page)?)?|tweet|email|print|save|"
+    r"back to top|skip( to (main )?content)?)$")
+_SAFE_BOILER = re.compile(
+    r"^(the post .{1,200} appeared first on\b|all rights reserved|\u00a9|copyright (\u00a9|\(c\)|\d{4}))")
 _SR_ONLY = re.compile(r"sr-only|screen-reader-text|visually-?hidden|assistive-text", re.I)
 _NOISE_ROLES = {"complementary", "banner", "navigation", "contentinfo", "dialog", "alertdialog",
                 "search", "toolbar"}
@@ -293,6 +316,10 @@ def _text_len(el) -> int:
 
 def _norm(text: str) -> str:
     return re.sub(r"\s+", " ", text.strip().lower()).strip(" :-\u2013\u2014.\u2026\u00bb\u203a\u2192|\u2022")
+
+
+def _trim_level() -> str:
+    return "strict" if os.environ.get("READER_TRIM", "light").strip().lower() == "strict" else "light"
 
 
 def _pick_container(soup):
@@ -381,20 +408,27 @@ def _is_hidden(tag) -> bool:
     return bool(_HIDDEN_STYLE.search(tag.get("style") or ""))
 
 
-def _remove_noise(container, strict: bool) -> None:
-    """strict=True (full-page mode) removes only hidden elements and ad
-    containers, so the 'Full page' view still shows everything else."""
-    tokens = _AD_TOKENS if strict else _NOISE_TOKENS
+def _remove_noise(container, mode: str) -> None:
+    """mode "strict": class-name noise, roles, hidden elements (the aggressive
+    rules). mode "light": ad containers and overlays only; hidden elements are
+    kept because collapsed sections and "read more" text are real content.
+    mode "full" (Full page view): ad containers and hidden elements only."""
+    if mode == "strict":
+        tokens, roles, drop_hidden, sr_only = _NOISE_TOKENS, _NOISE_ROLES, True, True
+    elif mode == "full":
+        tokens, roles, drop_hidden, sr_only = _AD_TOKENS, set(), True, False
+    else:
+        tokens, roles, drop_hidden, sr_only = _LIGHT_TOKENS, _LIGHT_ROLES, False, True
     for tag in list(container.find_all(True)):
         if tag is container or tag.attrs is None:
             continue
-        if _is_hidden(tag):
+        if drop_hidden and _is_hidden(tag):
             tag.extract()
             continue
         toks, raw = _attr_tokens(tag)
         if toks & tokens:
             tag.extract()
-        elif not strict and (_SR_ONLY.search(raw) or (tag.get("role") or "").lower() in _NOISE_ROLES):
+        elif (sr_only and _SR_ONLY.search(raw)) or (roles and (tag.get("role") or "").lower() in roles):
             tag.extract()
         elif any(k.startswith(("data-ad", "data-google", "data-dfp")) for k in tag.attrs):
             tag.extract()
@@ -423,7 +457,7 @@ def _remove_link_dense(container) -> None:
 
 # ---- cleaning
 
-def _clean_img(tag, page_url: str) -> None:
+def _clean_img(tag, page_url: str, mode: str) -> None:
     src = ""
     for attr in _IMG_SOURCES:
         candidate = (tag.get(attr) or "").strip()
@@ -438,8 +472,11 @@ def _clean_img(tag, page_url: str) -> None:
         parts = urlsplit(urljoin(page_url, _CTRL.sub("", src).replace("\\", "/"))) if src else None
     except ValueError:
         parts = None
-    if (not parts or parts.scheme not in ("http", "https") or "@" in parts.netloc or tiny
-            or _AD_SRC.search(src) or "advert" in alt.lower()):
+    if mode == "strict":
+        ad_like = bool(_AD_SRC.search(src)) or "advert" in alt.lower()
+    else:   # "pixel", "analytics" or "advert" in a name/alt is usually a real image
+        ad_like = bool(_AD_SRC_LIGHT.search(src)) or alt.strip().lower() in _AD_ALT_LIGHT
+    if not parts or parts.scheme not in ("http", "https") or "@" in parts.netloc or tiny or ad_like:
         tag.decompose()
         return
     tag.attrs = {"src": parts._replace(scheme="https").geturl(), "alt": alt, "loading": "lazy",
@@ -481,7 +518,7 @@ def _clean_anchor(tag, page_url: str, allowed) -> None:
         tag.attrs = {"class": ["blocked-link"], "title": "Not one of your sources"}
 
 
-def _strip_boilerplate(container, ad_only: bool) -> None:
+def _strip_boilerplate(container, mode: str) -> None:
     """Runs after cleaning, when spans are unwrapped: elements that are
     nothing but 'Advertisement', 'Share', 'Sign up for ...', 'The post X
     appeared first on Y', copyright lines, and so on. Only short elements
@@ -493,17 +530,32 @@ def _strip_boilerplate(container, ad_only: bool) -> None:
         if not text or len(text) > 200:
             continue
         n = _norm(text)
-        if _AD_LABEL.match(n) or (not ad_only and (_LABEL_ONLY.match(n) or _CTA_PREFIX.match(n))):
+        if _AD_LABEL.match(n):
+            drop = True
+        elif mode == "strict":
+            drop = bool(_LABEL_ONLY.match(n) or _CTA_PREFIX.match(n))
+        elif mode == "light":
+            drop = bool(_LIGHT_LABEL.match(n) or _SAFE_BOILER.match(n))
+        else:
+            drop = False
+        if drop:
             tag.extract()
 
 
-def _drop_title_duplicates(container, title: str) -> None:
-    """The page header already shows the title; drop the body's own copy."""
+def _drop_title_duplicates(container, title: str, mode: str) -> None:
+    """The page header already shows the title; drop the body's own copy.
+    Light mode needs a near-identical heading, so a real section heading that
+    merely appears inside the title (e.g. "The River") is kept."""
     t = _norm(title)
     for h in container.find_all(["h1", "h2", "h3"], limit=3):
         h_norm = _norm(h.get_text(" ", strip=True))
-        if h_norm and (h_norm == t or (len(h_norm) >= 8 and (h_norm in t or t in h_norm))):
+        if not h_norm:
+            continue
+        if h_norm == t:
             h.extract()
+        elif len(h_norm) >= 8 and (h_norm in t or t in h_norm):
+            if mode == "strict" or min(len(h_norm), len(t)) / max(len(h_norm), len(t)) >= 0.85:
+                h.extract()
 
 
 def _prune_empty(container) -> None:
@@ -540,7 +592,7 @@ def _mark_lede(container) -> None:
             return
 
 
-def extract(data: bytes, page_url: str, allowed, full: bool = False) -> Article:
+def extract(data: bytes, page_url: str, allowed, full: bool = False, trim: str = None) -> Article:
     soup = BeautifulSoup(data, "html.parser")
     host = urlsplit(page_url).hostname or ""
     meta = _page_meta(soup, host)
@@ -550,15 +602,25 @@ def extract(data: bytes, page_url: str, allowed, full: bool = False) -> Article:
     for tag in soup.find_all(lambda t: bool(t.name) and t.name.startswith("amp-")):
         tag.decompose()
 
+    trim = trim or _trim_level()
+    mode = "full" if full else trim
     if full:
         container = soup.body or soup
-    else:
+    elif trim == "strict":
         for tag in soup.find_all(_DROP_READER):
             tag.decompose()
         container = _pick_container(soup)
+    else:
+        container = _pick_container(soup)
+        # Site chrome only needs dropping when we fell back to a wide container.
+        # Inside an <article>, asides/footers/navs are pull quotes, author
+        # notes and pagination: part of the piece.
+        if container.name != "article":
+            for tag in container.find_all(_DROP_READER):
+                tag.decompose()
 
-    _remove_noise(container, strict=full)
-    if not full:
+    _remove_noise(container, mode)
+    if mode == "strict":
         _remove_link_dense(container)
     title = _choose_title(meta["title"], container, host)
 
@@ -572,15 +634,15 @@ def extract(data: bytes, page_url: str, allowed, full: bool = False) -> Article:
         elif tag.name == "a":
             _clean_anchor(tag, page_url, allowed)
         elif tag.name == "img":
-            _clean_img(tag, page_url)
+            _clean_img(tag, page_url, mode)
         elif tag.name in ("td", "th"):
             tag.attrs = {k: v for k, v in tag.attrs.items() if k in ("colspan", "rowspan")}
         else:
             keep_id = tag.get("id")
             tag.attrs = {"id": _frag(keep_id)} if keep_id else {}
 
-    _strip_boilerplate(container, ad_only=full)
-    _drop_title_duplicates(container, title)
+    _strip_boilerplate(container, mode)
+    _drop_title_duplicates(container, title, mode)
     _prune_empty(container)
     _mark_lede(container)
 
