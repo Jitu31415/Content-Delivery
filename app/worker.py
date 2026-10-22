@@ -74,14 +74,18 @@ def run_cycle() -> dict:
         _release_lock(token)
 
 
-def _load_known_ids() -> tuple[set, set]:
+def _load_known_ids() -> tuple[set, set, set]:
     """One short session, ids only. Passed to the fetchers so they skip what
     is already stored: no Shorts probe, no full-article fetch, no insert."""
     with db_session() as conn:
         yt = {r["video_id"] for r in conn.execute("SELECT video_id FROM youtube_cache").fetchall()}
         yt |= {r["video_id"] for r in conn.execute("SELECT video_id FROM youtube_skip").fetchall()}
         sub = {r["article_id"] for r in conn.execute("SELECT article_id FROM substack_cache").fetchall()}
-    return yt, sub
+        # Only rows that already hold a summary: legacy NULL rows must be fetched
+        # again so they can be backfilled.
+        rss = {r["item_id"] for r in conn.execute(
+            "SELECT item_id FROM rss_cache WHERE summary IS NOT NULL").fetchall()}
+    return yt, sub, rss
 
 
 def _build_jobs(sources: dict) -> list[tuple]:
@@ -108,7 +112,8 @@ def _label(job: tuple) -> str:
     return f"{kind}:{b.get('name')}"
 
 
-def _fetch_all(jobs: list[tuple], yt_known: set, sub_known: set, cookie: str) -> list[tuple]:
+def _fetch_all(jobs: list[tuple], yt_known: set, sub_known: set, rss_known: set,
+               cookie: str) -> list[tuple]:
     """Network + parse for every source, concurrently, with NO database
     connection open. Returns [(job, payload | None, error | None), ...].
     The known-id sets are shared read-only across threads."""
@@ -120,7 +125,7 @@ def _fetch_all(jobs: list[tuple], yt_known: set, sub_known: set, cookie: str) ->
             elif kind == "substack":
                 payload = substack.fetch_feed(a, cookie, sub_known)
             else:
-                payload = generic_rss.fetch_feed_records(b["url"], b["name"], a)
+                payload = generic_rss.fetch_feed_records(b["url"], b["name"], a, rss_known)
             return job, payload, None
         except Exception as e:
             return job, None, e
@@ -142,10 +147,10 @@ def _run_cycle_locked() -> dict:
     sources = config.load_sources()
     summary = {"youtube": 0, "substack": 0, "news": 0, "papers": 0, "blogs": 0, "errors": []}
 
-    yt_known, sub_known = _load_known_ids()
+    yt_known, sub_known, rss_known = _load_known_ids()
     cookie = config.get_substack_cookie()
     jobs = _build_jobs(sources)
-    fetched = _fetch_all(jobs, yt_known, sub_known, cookie)
+    fetched = _fetch_all(jobs, yt_known, sub_known, rss_known, cookie)
 
     for job, _payload, err in fetched:
         if err is not None:

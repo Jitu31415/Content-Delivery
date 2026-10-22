@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 load_dotenv()  # must run before app.config reads any env vars below
 
-from fastapi import FastAPI, Header, HTTPException, Request, Response, BackgroundTasks
+from fastapi import FastAPI, Header, HTTPException, Query, Request, Response, BackgroundTasks
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -20,6 +20,7 @@ from app import config, worker
 from app import reader
 from app.sandbox import SandboxMiddleware
 from app.database import db_session, init_db
+from app.extractors import generic_rss
 from app.extractors import youtube as youtube_extractor
 
 BASE_DIR = Path(__file__).parent.parent
@@ -54,6 +55,17 @@ def _get_or_set_device_id(request: Request, response: Response) -> str:
 
 
 TABS = ["scientific", "music_poetry", "podcast", "religious"]
+
+# Columns the list pages need. Deliberately excludes `summary`: it can be tens of
+# KB per row, and 40 rows of it would be pulled over the network on every page view.
+RSS_LIST_COLS = "item_id, module_type, source_name, published_date, url, title, is_saved"
+
+# module_type -> (list page, label) for the back link on /item.
+ITEM_BACK = {
+    "News": ("/news", "News"),
+    "Paper": ("/papers?tab=Journals", "Journals"),
+    "Blog": ("/papers?tab=Blogs", "Blogs"),
+}
 
 # module -> (table, primary key column). Used by the generic save-toggle route.
 VALID_MODULES = {
@@ -291,7 +303,9 @@ def clear_history(request: Request, response: Response):
 
 # ---------------------------------------------------------------- save toggle (shared)
 
-@app.post("/save/{module}/{item_id}")
+# {item_id:path}: RSS and Substack ids are usually URLs. A plain {item_id} matches a
+# single path segment, and "%2F" is decoded to "/" before routing, so those ids 404.
+@app.post("/save/{module}/{item_id:path}")
 def toggle_save(module: str, item_id: str):
     if module not in VALID_MODULES:
         raise HTTPException(404, "unknown module")
@@ -330,7 +344,7 @@ def _feed_page(request: Request, module_type: str, page: int):
     limit, offset = 40, (page - 1) * 40
     with db_session() as conn:
         items = conn.execute(
-            "SELECT * FROM rss_cache WHERE module_type = ? "
+            f"SELECT {RSS_LIST_COLS} FROM rss_cache WHERE module_type = ? "
             "ORDER BY published_date DESC LIMIT ? OFFSET ?",
             (module_type, limit, offset),
         ).fetchall()
@@ -352,7 +366,7 @@ def news_feed(request: Request, tab: str = "country", page: int = 1):
     # Dynamically construct the IN clause placeholders based on the array length
     placeholders = ",".join("?" * len(allowed_sources))
     query = f"""
-        SELECT * FROM rss_cache
+        SELECT {RSS_LIST_COLS} FROM rss_cache
         WHERE module_type = 'News' AND source_name IN ({placeholders})
         ORDER BY published_date DESC LIMIT ? OFFSET ?
     """
@@ -382,7 +396,7 @@ def library_feed(request: Request, tab: str = "Journals", page: int = 1):
 
     with db_session() as conn:
         items = conn.execute(
-            "SELECT * FROM rss_cache WHERE module_type = ? ORDER BY published_date DESC LIMIT ? OFFSET ?",
+            f"SELECT {RSS_LIST_COLS} FROM rss_cache WHERE module_type = ? ORDER BY published_date DESC LIMIT ? OFFSET ?",
             (target_module, limit, offset),
         ).fetchall()
 
@@ -392,6 +406,31 @@ def library_feed(request: Request, tab: str = "Journals", page: int = 1):
         "module_slug": "papers",
         "tabs": list(VALID_TABS.keys()),
         "active_tab": tab,
+    })
+
+# ---------------------------------------------------------------- item detail
+
+@app.get("/item", response_class=HTMLResponse)
+def item_detail(request: Request, item_id: str = Query("", alias="id")):
+    """One news / paper / blog item, read inside the app from the feed's own
+    stored text. The id travels as a query parameter because ids are URLs.
+    Sync `def`: blocking DB call stays off the event loop."""
+    if not item_id:
+        raise HTTPException(404, "item not found")
+    with db_session() as conn:
+        row = conn.execute(
+            f"SELECT {RSS_LIST_COLS}, summary FROM rss_cache WHERE item_id = ?", (item_id,)
+        ).fetchone()
+    if row is None:
+        raise HTTPException(404, "item not found")
+    back_href, back_label = ITEM_BACK.get(row["module_type"], ("/", "Home"))
+    return templates.TemplateResponse(request, "item.html", {
+        "item": row,
+        # Sanitised at ingest and again here, so a bad row cannot inject markup.
+        "summary": generic_rss.sanitize_summary(row.get("summary") or ""),
+        # Only offered when the item's host is an allowed source.
+        "reader_link": reader.reader_href(row.get("url") or "", "https://invalid.invalid/", reader.allowed_hosts()),
+        "back_href": back_href, "back_label": back_label,
     })
 
 # ---------------------------------------------------------------- reader (allowlisted)

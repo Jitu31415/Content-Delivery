@@ -33,7 +33,9 @@ import ipaddress
 import os
 import re
 import socket
-from urllib.parse import quote, urljoin, urlsplit
+from dataclasses import dataclass
+from datetime import date
+from urllib.parse import quote, unquote, urljoin, urlsplit
 
 import httpx
 from bs4 import BeautifulSoup
@@ -76,8 +78,7 @@ def derive_hosts(sources: dict, extra=()) -> frozenset:
         for feed in sources.get(key) or []:
             add(urlsplit(feed.get("url", "")).hostname)
     for author in sources.get("substack") or []:
-        clean = author.strip("/")
-        add(clean if "." in clean else f"{clean}.substack.com")
+        add(f"{author}.substack.com")
     for h in sources.get("reader_hosts") or []:
         add(h)
     for h in extra:
@@ -216,11 +217,53 @@ def fetch_page(url: str, allowed, client=None):
 
 _DROP_ALWAYS = ["script", "style", "noscript", "svg", "iframe", "frame", "frameset", "object",
                 "embed", "video", "audio", "canvas", "form", "button", "input", "select",
-                "textarea", "dialog", "template", "source", "link", "meta", "base"]
+                "textarea", "dialog", "template", "source", "link", "meta", "base", "ins",
+                "fencedframe"]
 _DROP_READER = ["nav", "aside", "footer"]
-_NOISE = re.compile(
-    r"comment|share|social|newsletter|subscribe|related|promo|advert|cookie|consent|sidebar|popup|modal|donat",
-    re.I)
+
+# Class/id TOKENS (split on non-alphanumerics and camelCase), not substrings:
+# "ad" must hit "article-ad-slot" and "adSlot" but not "header", "read" or "shadow".
+_AD_TOKENS = {"ad", "ads", "adv", "advert", "advertisement", "advertising", "adslot", "adsbygoogle",
+              "adunit", "sponsor", "sponsors", "sponsored", "promoted", "dfp", "taboola", "outbrain",
+              "googlead"}
+_NOISE_TOKENS = _AD_TOKENS | {
+    "promo", "promotion", "newsletter", "signup", "subscribe", "subscription", "paywall", "share",
+    "sharing", "social", "related", "recommended", "recommendation", "trending", "comments",
+    "comment", "cookie", "cookies", "consent", "gdpr", "popup", "modal", "sidebar", "breadcrumb",
+    "breadcrumbs", "widget", "widgets", "donate", "donation", "toolbar", "skip", "print",
+}
+_SR_ONLY = re.compile(r"sr-only|screen-reader-text|visually-?hidden|assistive-text", re.I)
+_NOISE_ROLES = {"complementary", "banner", "navigation", "contentinfo", "dialog", "alertdialog",
+                "search", "toolbar"}
+_HIDDEN_STYLE = re.compile(r"display\s*:\s*none|visibility\s*:\s*hidden", re.I)
+_AD_SRC = re.compile(r"doubleclick|googlesyndication|adservice|adsystem|/ads?/|pixel|scorecardresearch|"
+                     r"facebook\.com/tr|outbrain|taboola|analytics|beacon|tracker", re.I)
+_CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+
+# Short elements that are only a label, or open with an unmistakable call to action.
+_AD_LABEL = re.compile(
+    r"^(advertisement|advertising|advertorial|sponsored( content| post)?|promoted( content)?|"
+    r"paid (content|post)|scroll to continue( reading)?|story continues( below)?( advertisement)?|"
+    r"advertisement\s*[-\u2013\u2014]\s*scroll to continue( reading)?|continue reading below)$")
+_LABEL_ONLY = re.compile(
+    r"^(sponsored by .{1,40}|ads?|related( (stories|articles|reading|posts|content|coverage|topics))?|"
+    r"more (stories|from .{1,40}|on this topic|like this)|recommended( for you)?|trending( now| stories)?|"
+    r"share( this( article| story| post| page)?)?|tweet|email|print|save|(\d+ )?comments?|read more|"
+    r"read also|also read|continue reading|newsletter|subscribe|sign up|follow us|listen|"
+    r"listen to this article|skip( to (main )?content)?|back to top|top|see also|you may also like)$")
+_CTA_PREFIX = re.compile(
+    r"^(sign ?up (for|to|now|today)\b|subscribe (to|now|today|for)\b|follow us\b|"
+    r"get (our|the) (latest|newsletter|best|daily|weekly|free)\b|join (our|the) (newsletter|mailing list|community)\b|"
+    r"download (our|the) (free )?app\b|click here (to|for)\b|scroll to continue\b|story continues\b|"
+    r"continue reading\b|read more:|read also:|also read:|related:|related (stories|articles|reading)\b|"
+    r"the post .{1,200} appeared first on\b|this (article|story) (was )?(originally )?(published|appeared) (in|on|at)\b|"
+    r"all rights reserved|\u00a9|copyright (\u00a9|\(c\)|\d{4})|we use cookies|this (site|website) uses cookies|"
+    r"(accept|manage) (all )?cookies|support (our|independent) (journalism|work|reporting)\b|"
+    r"become a (member|subscriber|supporter)\b)")
+_TEXT_BLOCKS = ["p", "div", "li", "h2", "h3", "h4", "h5", "h6", "figcaption", "dt", "dd", "small", "cite"]
+_PRUNABLE = ["p", "div", "li", "ul", "ol", "figure", "blockquote", "h2", "h3", "h4", "h5", "h6",
+             "figcaption", "pre", "dl"]
+
 _ALLOWED_TAGS = {
     "p", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "dl", "dt", "dd", "blockquote",
     "pre", "code", "em", "strong", "b", "i", "u", "sub", "sup", "br", "hr", "small", "mark",
@@ -229,10 +272,27 @@ _ALLOWED_TAGS = {
 }
 _IMG_SOURCES = ("src", "data-src", "data-lazy-src", "data-original")
 _MIN_TEXT = 400
+_SEP = re.compile(r"\s[|\u2013\u2014\u00b7\u2022]\s|\s-\s")
+
+
+@dataclass
+class Article:
+    title: str
+    body_html: str
+    text_len: int
+    words: int
+    site: str
+    author: str
+    published: str
+    lang: str
 
 
 def _text_len(el) -> int:
     return len(el.get_text(" ", strip=True))
+
+
+def _norm(text: str) -> str:
+    return re.sub(r"\s+", " ", text.strip().lower()).strip(" :-\u2013\u2014.\u2026\u00bb\u203a\u2192|\u2022")
 
 
 def _pick_container(soup):
@@ -250,14 +310,118 @@ def _pick_container(soup):
     return soup.body or soup
 
 
-def _title(soup, fallback: str) -> str:
-    og = soup.find("meta", attrs={"property": "og:title"})
-    if og and og.get("content"):
-        return og["content"].strip()
-    if soup.title and soup.title.get_text(strip=True):
-        return soup.title.get_text(strip=True)
-    return fallback
+# ---- page metadata
 
+def _meta_content(soup, **attrs) -> str:
+    el = soup.find("meta", attrs=attrs)
+    return (el.get("content") or "").strip() if el is not None else ""
+
+
+def _fmt_date(value: str) -> str:
+    m = re.match(r"(\d{4})-(\d{2})-(\d{2})", value or "")
+    if not m:
+        return ""
+    try:
+        d = date(int(m[1]), int(m[2]), int(m[3]))
+    except ValueError:
+        return ""
+    return f"{d.day} {d.strftime('%B %Y')}"
+
+
+def _page_meta(soup, host: str) -> dict:
+    title = _meta_content(soup, property="og:title")
+    if not title and soup.title is not None:
+        title = soup.title.get_text(strip=True)
+    site = _meta_content(soup, property="og:site_name") or host.removeprefix("www.")
+    author = _meta_content(soup, name="author")
+    if not author or author.lower().startswith("http") or len(author) > 80:
+        author = ""
+    published = ""
+    for attrs in ({"property": "article:published_time"}, {"itemprop": "datePublished"},
+                  {"name": "date"}, {"name": "pubdate"}):
+        published = _fmt_date(_meta_content(soup, **attrs))
+        if published:
+            break
+    if not published:
+        t = soup.find("time", attrs={"datetime": True})
+        published = _fmt_date(t["datetime"]) if t is not None else ""
+    lang = ""
+    if soup.html is not None:
+        lang = (soup.html.get("lang") or "").strip()
+    if not re.fullmatch(r"[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*", lang):
+        lang = "en"
+    return {"title": title, "site": site[:80], "author": author, "published": published, "lang": lang}
+
+
+def _trim_site_suffix(title: str) -> str:
+    parts = [p.strip() for p in _SEP.split(title or "") if p.strip()]
+    return max(parts, key=len) if parts else (title or "").strip()
+
+
+def _choose_title(meta_title: str, container, host: str) -> str:
+    h1 = container.find("h1")
+    if h1 is not None:
+        t = " ".join(h1.get_text(" ", strip=True).split())
+        if 8 <= len(t) <= 220:
+            return t
+    return _trim_site_suffix(meta_title) or host
+
+
+# ---- noise removal
+
+def _attr_tokens(tag):
+    raw = " ".join([" ".join(tag.get("class") or []), tag.get("id") or ""])
+    raw = _CAMEL.sub(" ", raw).lower()
+    return set(re.findall(r"[a-z0-9]+", raw)), raw
+
+
+def _is_hidden(tag) -> bool:
+    if tag.has_attr("hidden") or (tag.get("aria-hidden") or "").lower() == "true":
+        return True
+    return bool(_HIDDEN_STYLE.search(tag.get("style") or ""))
+
+
+def _remove_noise(container, strict: bool) -> None:
+    """strict=True (full-page mode) removes only hidden elements and ad
+    containers, so the 'Full page' view still shows everything else."""
+    tokens = _AD_TOKENS if strict else _NOISE_TOKENS
+    for tag in list(container.find_all(True)):
+        if tag is container or tag.attrs is None:
+            continue
+        if _is_hidden(tag):
+            tag.extract()
+            continue
+        toks, raw = _attr_tokens(tag)
+        if toks & tokens:
+            tag.extract()
+        elif not strict and (_SR_ONLY.search(raw) or (tag.get("role") or "").lower() in _NOISE_ROLES):
+            tag.extract()
+        elif any(k.startswith(("data-ad", "data-google", "data-dfp")) for k in tag.attrs):
+            tag.extract()
+
+
+def _link_dense(tag) -> bool:
+    """Blocks that are mostly links ("more stories", tag clouds, link bars).
+    A list whose links are all in-page anchors is a table of contents: kept."""
+    anchors = tag.find_all("a")
+    if len(anchors) < 3:
+        return False
+    if all((a.get("href") or "").startswith("#") for a in anchors):
+        return False
+    total = _text_len(tag)
+    if total == 0:
+        return True
+    link_text = sum(_text_len(a) for a in anchors)
+    return link_text / total > 0.8 and link_text / len(anchors) < 80
+
+
+def _remove_link_dense(container) -> None:
+    for tag in list(container.find_all(["ul", "ol", "div", "section", "p", "table"])):
+        if tag is not container and tag.parent is not None and _link_dense(tag):
+            tag.extract()
+
+
+# ---- cleaning
 
 def _clean_img(tag, page_url: str) -> None:
     src = ""
@@ -267,21 +431,47 @@ def _clean_img(tag, page_url: str) -> None:
             src = candidate
             break
     alt = tag.get("alt", "")
+    tiny = any(str(tag.get(k, "")).strip().isdigit() and int(str(tag.get(k)).strip()) <= 3
+               for k in ("width", "height"))
     tag.attrs = {}
     try:
         parts = urlsplit(urljoin(page_url, _CTRL.sub("", src).replace("\\", "/"))) if src else None
     except ValueError:
         parts = None
-    if not parts or parts.scheme not in ("http", "https") or "@" in parts.netloc:
+    if (not parts or parts.scheme not in ("http", "https") or "@" in parts.netloc or tiny
+            or _AD_SRC.search(src) or "advert" in alt.lower()):
         tag.decompose()
         return
-    tag.attrs = {"src": parts._replace(scheme="https").geturl(), "alt": alt, "loading": "lazy"}
+    tag.attrs = {"src": parts._replace(scheme="https").geturl(), "alt": alt, "loading": "lazy",
+                 "decoding": "async"}
+
+
+def _frag(value: str) -> str:
+    """Element ids from the source page are kept (so tables of contents and
+    footnotes still jump), but prefixed so they can never collide with this
+    page's own ids (e.g. the progress bar)."""
+    return "r-" + re.sub(r"[^\w.:-]", "-", unquote(value))
+
+
+def _same_page_fragment(href: str, page_url: str) -> str:
+    try:
+        target = urlsplit(urljoin(page_url, _CTRL.sub("", href).replace("\\", "/")))
+    except ValueError:
+        return ""
+    base = urlsplit(page_url)
+    if target.fragment and target._replace(fragment="").geturl() == base._replace(fragment="").geturl():
+        return target.fragment
+    return ""
 
 
 def _clean_anchor(tag, page_url: str, allowed) -> None:
     href = (tag.get("href") or "").strip()
     if href.startswith("#") and len(href) > 1:
-        tag.attrs = {"href": href}
+        tag.attrs = {"href": "#" + _frag(href[1:])}
+        return
+    frag = _same_page_fragment(href, page_url)
+    if frag:                      # absolute URL pointing back into this same article
+        tag.attrs = {"href": "#" + _frag(frag)}
         return
     via = reader_href(href, page_url, allowed)
     if via:
@@ -291,13 +481,73 @@ def _clean_anchor(tag, page_url: str, allowed) -> None:
         tag.attrs = {"class": ["blocked-link"], "title": "Not one of your sources"}
 
 
-def extract(data: bytes, page_url: str, allowed, full: bool = False):
-    """Returns (title, body_html, text_length)."""
+def _strip_boilerplate(container, ad_only: bool) -> None:
+    """Runs after cleaning, when spans are unwrapped: elements that are
+    nothing but 'Advertisement', 'Share', 'Sign up for ...', 'The post X
+    appeared first on Y', copyright lines, and so on. Only short elements
+    are considered, and call-to-action patterns must open the text."""
+    for tag in list(container.find_all(_TEXT_BLOCKS)):
+        if tag is container or tag.parent is None:
+            continue
+        text = tag.get_text(" ", strip=True)
+        if not text or len(text) > 200:
+            continue
+        n = _norm(text)
+        if _AD_LABEL.match(n) or (not ad_only and (_LABEL_ONLY.match(n) or _CTA_PREFIX.match(n))):
+            tag.extract()
+
+
+def _drop_title_duplicates(container, title: str) -> None:
+    """The page header already shows the title; drop the body's own copy."""
+    t = _norm(title)
+    for h in container.find_all(["h1", "h2", "h3"], limit=3):
+        h_norm = _norm(h.get_text(" ", strip=True))
+        if h_norm and (h_norm == t or (len(h_norm) >= 8 and (h_norm in t or t in h_norm))):
+            h.extract()
+
+
+def _prune_empty(container) -> None:
+    for _ in range(3):
+        for tag in list(container.find_all(_PRUNABLE)):
+            if tag.parent is not None and not tag.get_text(strip=True) and tag.find("img") is None:
+                tag.extract()
+    # Collapse runs of <br>/<hr>, and trim them from both ends.
+    prev = None
+    for tag in list(container.find_all(["br", "hr"])):
+        sib = tag.previous_sibling
+        while sib is not None and isinstance(sib, str) and not sib.strip():
+            sib = sib.previous_sibling
+        if sib is not None and getattr(sib, "name", None) == tag.name:
+            tag.extract()
+    for end in ("first", "last"):
+        while True:
+            kids = [c for c in container.children if getattr(c, "name", None) or (isinstance(c, str) and c.strip())]
+            if not kids:
+                break
+            node = kids[0] if end == "first" else kids[-1]
+            if getattr(node, "name", None) in ("br", "hr"):
+                node.extract()
+            else:
+                break
+
+
+def _mark_lede(container) -> None:
+    for p in container.find_all("p"):
+        text = p.get_text(" ", strip=True)
+        if len(text) >= 120:
+            if text[0].isascii() and text[0].isalpha():
+                p["class"] = ["lede"]
+            return
+
+
+def extract(data: bytes, page_url: str, allowed, full: bool = False) -> Article:
     soup = BeautifulSoup(data, "html.parser")
     host = urlsplit(page_url).hostname or ""
-    title = _title(soup, host)
+    meta = _page_meta(soup, host)
 
     for tag in soup.find_all(_DROP_ALWAYS):
+        tag.decompose()
+    for tag in soup.find_all(lambda t: bool(t.name) and t.name.startswith("amp-")):
         tag.decompose()
 
     if full:
@@ -306,16 +556,17 @@ def extract(data: bytes, page_url: str, allowed, full: bool = False):
         for tag in soup.find_all(_DROP_READER):
             tag.decompose()
         container = _pick_container(soup)
-        for tag in container.find_all(True):
-            if tag.attrs is None:
-                continue
-            ident = " ".join(filter(None, [" ".join(tag.get("class") or []), tag.get("id") or ""]))
-            if ident and _NOISE.search(ident):
-                tag.extract()
+
+    _remove_noise(container, strict=full)
+    if not full:
+        _remove_link_dense(container)
+    title = _choose_title(meta["title"], container, host)
 
     for tag in list(container.find_all(True)):
         if tag.parent is None and tag is not container:
             continue
+        if tag.name == "h1":
+            tag.name = "h2"          # the page header carries the only h1
         if tag.name not in _ALLOWED_TAGS:
             tag.unwrap()
         elif tag.name == "a":
@@ -325,54 +576,151 @@ def extract(data: bytes, page_url: str, allowed, full: bool = False):
         elif tag.name in ("td", "th"):
             tag.attrs = {k: v for k, v in tag.attrs.items() if k in ("colspan", "rowspan")}
         else:
-            tag.attrs = {}
+            keep_id = tag.get("id")
+            tag.attrs = {"id": _frag(keep_id)} if keep_id else {}
 
-    return title, container.decode_contents(), _text_len(container)
+    _strip_boilerplate(container, ad_only=full)
+    _drop_title_duplicates(container, title)
+    _prune_empty(container)
+    _mark_lede(container)
+
+    return Article(
+        title=title, body_html=container.decode_contents(), text_len=_text_len(container),
+        words=len(container.get_text(" ").split()), site=meta["site"], author=meta["author"],
+        published=meta["published"], lang=meta["lang"],
+    )
 
 
 # ---------------------------------------------------------------- rendering
 
 _CSS = """
-body{font:18px/1.6 Georgia,serif;margin:0;color:#1d1d1f;background:#fbfaf7}
-@media(prefers-color-scheme:dark){body{color:#e6e6e6;background:#151515}a{color:#8ab4f8}}
-.bar{position:sticky;top:0;display:flex;gap:12px;align-items:center;padding:8px 14px;
-background:inherit;border-bottom:1px solid #8884;font:14px system-ui,sans-serif}
-.bar .host{opacity:.65;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.bar button{font:inherit;padding:4px 10px}
-main{max-width:42rem;margin:0 auto;padding:1rem 1.2rem 4rem}
-img{max-width:100%;height:auto}pre{overflow:auto}table{border-collapse:collapse;display:block;overflow:auto}
-td,th{border:1px solid #8886;padding:4px 8px}
-.blocked-link{text-decoration:underline dotted;opacity:.8}
-.note{font:14px system-ui,sans-serif;opacity:.8;border-left:3px solid #8886;padding-left:10px}
+:root{--fs:18px;--bg:#fbfaf6;--fg:#1f1d1a;--muted:#6f6a60;--rule:#e4dfd3;--card:#f1ede2;--accent:#a3411c}
+html[data-theme=sepia]{--bg:#f3ead6;--fg:#3b2f20;--muted:#7a6a52;--rule:#dccdae;--card:#eadfc4;--accent:#8a4b12}
+html[data-theme=dark]{--bg:#151412;--fg:#e9e5dc;--muted:#9b958a;--rule:#2c2a26;--card:#1f1d1a;--accent:#e7a35f}
+@media(prefers-color-scheme:dark){html:not([data-theme]){--bg:#151412;--fg:#e9e5dc;--muted:#9b958a;--rule:#2c2a26;--card:#1f1d1a;--accent:#e7a35f}}
+*{box-sizing:border-box}
+html{font-size:var(--fs);-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--fg);
+font-family:Charter,"Iowan Old Style","Palatino Linotype","Book Antiqua",Georgia,"Noto Serif","Noto Serif Bengali",serif;
+line-height:1.7;text-rendering:optimizeLegibility}
+::selection{background:var(--accent);color:var(--bg)}
+a{color:var(--accent);text-underline-offset:.18em;text-decoration-thickness:1px}
+button,.bar a{font:600 .78rem system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+#rp{position:fixed;top:0;left:0;height:3px;width:0;background:var(--accent);z-index:20}
+.bar{position:sticky;top:0;z-index:10;display:flex;gap:.55rem;align-items:center;
+padding:.55rem max(.9rem,env(safe-area-inset-right)) .55rem max(.9rem,env(safe-area-inset-left));
+background:var(--bg);background:color-mix(in srgb,var(--bg) 88%,transparent);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
+border-bottom:1px solid var(--rule)}
+.bar .host{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);
+font:500 .78rem system-ui,sans-serif;letter-spacing:.02em}
+.bar button{color:var(--fg);background:var(--card);border:1px solid var(--rule);border-radius:.55rem;
+padding:.32rem .7rem;cursor:pointer}
+.bar a{color:var(--fg);text-decoration:none;padding:.32rem .2rem}
+main{max-width:38rem;margin:0 auto;padding:2.2rem max(1.25rem,env(safe-area-inset-left)) 1rem}
+.head{margin-bottom:2rem;padding-bottom:1.4rem;border-bottom:1px solid var(--rule)}
+.kicker{font:700 .72rem system-ui,sans-serif;letter-spacing:.16em;text-transform:uppercase;color:var(--accent);margin-bottom:.8rem}
+h1{font-size:2.2rem;font-size:clamp(1.9rem,6vw,2.6rem);line-height:1.12;letter-spacing:-.015em;margin:0 0 .9rem;
+font-weight:800;text-wrap:balance}
+.meta{font:500 .8rem system-ui,sans-serif;color:var(--muted);letter-spacing:.02em}
+.prose{hyphens:auto;overflow-wrap:break-word}
+.prose p{margin:0 0 1.15em;text-wrap:pretty}
+.prose .lede{font-size:1.1em;line-height:1.65}
+.prose .lede::first-line{font-variant:small-caps;letter-spacing:.04em;font-weight:600}
+.prose h2,.prose h3,.prose h4,.prose h5,.prose h6{line-height:1.25;margin:2em 0 .6em;text-wrap:balance}
+.prose h2{font-size:1.5rem;font-weight:800}.prose h3{font-size:1.2rem;font-weight:700}
+.prose h4,.prose h5,.prose h6{font-size:1rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.prose blockquote{margin:1.6em 0;padding:.1em 0 .1em 1.1em;border-left:3px solid var(--accent);
+font-style:italic;color:var(--muted);color:color-mix(in srgb,var(--fg) 82%,var(--muted))}
+.prose blockquote p:last-child{margin-bottom:0}
+.prose hr{border:0;text-align:center;margin:2.4em 0}
+.prose hr::after{content:"\\00b7  \\00b7  \\00b7";letter-spacing:.5em;color:var(--muted)}
+.prose figure{margin:1.8em 0}.prose figure img{display:block;margin:0 auto}
+.prose img{max-width:100%;height:auto;border-radius:.4rem}
+.prose figcaption{margin-top:.6em;text-align:center;font:.78rem/1.5 system-ui,sans-serif;color:var(--muted)}
+.prose ul,.prose ol{padding-left:1.4em;margin:0 0 1.15em}.prose li{margin:.3em 0}
+.prose code{font:.85em ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:var(--card);padding:.1em .35em;border-radius:.3rem}
+.prose pre{background:var(--card);border:1px solid var(--rule);border-radius:.6rem;padding:.9rem 1rem;overflow:auto;line-height:1.5}
+.prose pre code{background:none;padding:0}
+.prose table{display:block;overflow-x:auto;border-collapse:collapse;margin:1.4em 0;font-size:.9em}
+.prose th,.prose td{border:1px solid var(--rule);padding:.4em .7em;text-align:left}
+.prose tr:nth-child(even) td{background:var(--card)}
+.blocked-link{text-decoration:underline dotted;text-underline-offset:.18em}
+.note{font:.85rem system-ui,sans-serif;color:var(--muted);border-left:3px solid var(--rule);padding-left:.8rem;margin:0 0 1.6rem}
+.end{max-width:38rem;margin:1.5rem auto 4rem;padding:1.6rem max(1.25rem,env(safe-area-inset-left)) 0;text-align:center;
+font:500 .78rem system-ui,sans-serif;color:var(--muted);letter-spacing:.04em}
+.end .mark{display:block;margin-bottom:1rem;letter-spacing:.5em;color:var(--accent)}
+.end button,.end a{margin:0 .3rem;color:var(--fg);background:var(--card);border:1px solid var(--rule);
+border-radius:.55rem;padding:.4rem .9rem;cursor:pointer;text-decoration:none;font:600 .78rem system-ui,sans-serif}
+.end .src{display:block;margin-top:1rem}
+@media print{.bar,#rp,.end button,.end a{display:none}}
 """
 
+# Runs in <head>: restores the saved theme and text size before first paint (no flash).
+_JS_HEAD = """(function(){var d=document.documentElement,S;try{S=window.localStorage}catch(e){}
+function g(k){try{return S.getItem(k)}catch(e){return null}}
+var fs=parseInt(g('rr_fs'),10);if(fs>=14&&fs<=28)d.style.setProperty('--fs',fs+'px');
+var th=g('rr_theme');if(th==='light'||th==='sepia'||th==='dark')d.setAttribute('data-theme',th);})();"""
 
-def _page(title: str, bar: str, body: str) -> str:
+_JS_BODY = """(function(){var d=document.documentElement,S;try{S=window.localStorage}catch(e){}
+function s(k,v){try{S.setItem(k,v)}catch(e){}}
+window.rrSize=function(n){var c=parseFloat(getComputedStyle(d).getPropertyValue('--fs'))||18;
+c=Math.max(14,Math.min(28,c+n));d.style.setProperty('--fs',c+'px');s('rr_fs',String(c));};
+window.rrTheme=function(){var o=['light','sepia','dark'];
+var c=d.getAttribute('data-theme')||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');
+var n=o[(o.indexOf(c)+1)%3];d.setAttribute('data-theme',n);s('rr_theme',n);};
+var b=document.getElementById('rp');
+function p(){var h=d.scrollHeight-innerHeight;b.style.width=(h>0?Math.min(100,scrollY/h*100):0)+'%';}
+addEventListener('scroll',p,{passive:true});addEventListener('resize',p);p();})();"""
+
+
+def _page(title: str, bar: str, body: str, tail: str = "", lang: str = "en") -> str:
     return (
-        '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
-        '<meta name="viewport" content="width=device-width,initial-scale=1">'
-        f"<title>{_html.escape(title)}</title><style>{_CSS}</style></head><body>"
-        f'<div class="bar">{bar}</div><main>{body}</main></body></html>'
-    )
+        '<!DOCTYPE html><html lang="%s"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">'
+        '<meta name="color-scheme" content="light dark">'
+        "<title>%s</title><style>%s</style><script>%s</script></head><body>"
+        '<div id="rp"></div><div class="bar">%s</div><main>%s</main>%s<script>%s</script></body></html>'
+    ) % (lang, _html.escape(title), _CSS, _JS_HEAD, bar, body, tail, _JS_BODY)
 
 
-def render_article(title, final_url, body_html, text_len, full) -> str:
+def render_article(art: Article, final_url: str, full: bool) -> str:
     host = _html.escape(urlsplit(final_url).hostname or "")
-    toggle_href = f"{READ_PATH}?u={quote(final_url, safe='')}" + ("" if full else "&full=1")
+    toggle_href = f"{READ_PATH}?u={quote(final_url, safe='')}" + ("" if full else "&amp;full=1")
     toggle_label = "Reader view" if full else "Full page"
     bar = (
-        '<button onclick="history.back()">&larr;</button><a href="/">Home</a>'
-        f'<span class="host">{host}</span><a href="{toggle_href}">{toggle_label}</a>'
+        '<button onclick="history.back()" aria-label="Back">&larr;</button><a href="/">Home</a>'
+        f'<span class="host">{host}</span>'
+        '<button onclick="rrSize(-1)" aria-label="Smaller text">A&minus;</button>'
+        '<button onclick="rrSize(1)" aria-label="Larger text">A+</button>'
+        '<button onclick="rrTheme()" aria-label="Change theme">&#9680;</button>'
+        f'<a href="{toggle_href}">{toggle_label}</a>'
     )
+    meta_parts = [p for p in (art.author, art.published,
+                              f"{max(1, round(art.words / 220))} min read" if art.words >= 150 else "") if p]
+    meta = f'<div class="meta">{_html.escape(" · ".join(meta_parts))}</div>' if meta_parts else ""
     note = ""
-    if not full and text_len < _MIN_TEXT:
+    if not full and art.text_len < _MIN_TEXT:
         note = '<p class="note">Very little text was found. Try &ldquo;Full page&rdquo; above.</p>'
-    return _page(title, bar, f"{note}<h1>{_html.escape(title)}</h1>{body_html}")
+    body = (
+        f'{note}<header class="head"><div class="kicker">{_html.escape(art.site)}</div>'
+        f"<h1>{_html.escape(art.title)}</h1>{meta}</header>"
+        f'<div class="prose">{art.body_html}</div>'
+    )
+    tail = (
+        '<div class="end"><span class="mark">&middot; &middot; &middot;</span>'
+        '<button onclick="history.back()">&larr; Back</button><a href="/">Home</a>'
+        f'<span class="src">Source: {host}</span></div>'
+    )
+    return _page(art.title, bar, body, tail, art.lang)
 
 
 def error_page(err: ReaderError) -> str:
-    bar = '<button onclick="history.back()">&larr;</button><a href="/">Home</a>'
-    return _page("Cannot open", bar, f"<h1>Cannot open this page</h1><p>{_html.escape(err.message)}</p>")
+    bar = ('<button onclick="history.back()" aria-label="Back">&larr;</button><a href="/">Home</a>'
+           '<span class="host"></span>')
+    body = ('<header class="head"><div class="kicker">Cannot open</div><h1>This page cannot be opened</h1></header>'
+            f'<div class="prose"><p>{_html.escape(err.message)}</p></div>')
+    return _page("Cannot open", bar, body)
 
 
 def read(u: str, full: bool = False, allowed=None) -> str:
@@ -381,5 +729,4 @@ def read(u: str, full: bool = False, allowed=None) -> str:
     if not u or len(u) > MAX_URL_LEN:
         raise ReaderError(400, "That address is not valid.")
     final_url, data = fetch_page(u, allowed)
-    title, body_html, text_len = extract(data, final_url, allowed, full)
-    return render_article(title, final_url, body_html, text_len, full)
+    return render_article(extract(data, final_url, allowed, full), final_url, full)

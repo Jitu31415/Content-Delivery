@@ -19,7 +19,7 @@
   <ul class="feed-list">
     {% for i in items %}
     <li class="feed-item">
-      <a href="{{ i.url }}" target="_blank" rel="noopener">
+      <a href="/item?id={{ i.item_id|urlencode }}">
         <span class="feed-title">{{ i.title }}</span>
         <span class="feed-meta">{{ i.source_name }} · {{ i.published_date }}</span>
       </a>

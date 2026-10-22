@@ -14,7 +14,7 @@ TURSO_AUTH_TOKEN = os.getenv("TURSO_AUTH_TOKEN")
 # because on Turso the schema persists across container restarts and
 # re-running ~20 remote DDL statements on every cold start delays port
 # binding (uvicorn does not listen until lifespan startup returns).
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def dict_factory(cursor, row):
@@ -117,7 +117,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS rss_cache (
                 item_id TEXT PRIMARY KEY, module_type TEXT,
                 source_name TEXT, published_date TEXT,
-                url TEXT, title TEXT, is_saved INTEGER DEFAULT 0
+                url TEXT, title TEXT, is_saved INTEGER DEFAULT 0, summary TEXT
             )
         """)
 
@@ -188,6 +188,10 @@ def init_db():
         # these fixes, on your live Turso database, with a schema that had
         # already drifted out from under them.
         _ensure_columns(conn, "youtube_cache", [("thumbnail_url", "TEXT")])
+        # summary: sanitised feed text shown on /item. NULL = stored before the
+        # column existed (backfilled by generic_rss.store_records); '' = the feed
+        # has no text for that item.
+        _ensure_columns(conn, "rss_cache", [("summary", "TEXT")])
         _ensure_columns(conn, "substack_cache", [("content_html", "TEXT"), ("url", "TEXT")])
         _ensure_columns(conn, "user_history", [("device_id", "TEXT")])
         # Per-device history scoping. Existing rows predate this column and
