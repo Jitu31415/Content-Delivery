@@ -14,7 +14,7 @@ TURSO_AUTH_TOKEN = os.getenv("TURSO_AUTH_TOKEN")
 # because on Turso the schema persists across container restarts and
 # re-running ~20 remote DDL statements on every cold start delays port
 # binding (uvicorn does not listen until lifespan startup returns).
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def dict_factory(cursor, row):
@@ -184,6 +184,29 @@ def init_db():
         # every Short in a channel's feed would be re-probed every cycle
         # because it never appears in youtube_cache.
 
+        # Courses (see app/courses.py). Everything is keyed by device_id, the cookie
+        # that already scopes the history tab, so progress is visible only from the
+        # device that made it.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS courses (
+                device_id TEXT, playlist_id TEXT, title TEXT, channel TEXT,
+                thumb_video TEXT, total INTEGER, added_at TEXT,
+                PRIMARY KEY (device_id, playlist_id)
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS course_videos (
+                device_id TEXT, playlist_id TEXT, position INTEGER, video_id TEXT, title TEXT,
+                PRIMARY KEY (device_id, playlist_id, position)
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS course_progress (
+                device_id TEXT, playlist_id TEXT, video_id TEXT, completed_at TEXT,
+                PRIMARY KEY (device_id, playlist_id, video_id)
+            )
+        """)
+
         # --- migration pass: reconciles tables that already existed before
         # these fixes, on your live Turso database, with a schema that had
         # already drifted out from under them.
@@ -206,6 +229,7 @@ def init_db():
         conn.execute("CREATE INDEX IF NOT EXISTS ix_rss_mod_date ON rss_cache(module_type, published_date DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS ix_sub_date ON substack_cache(published_date DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS ix_hist_dev ON user_history(device_id, accessed_at DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_cv_video ON course_videos(device_id, playlist_id, video_id)")
 
         # Written last, inside the same session: a failure above leaves the
         # version unset, so the next start retries the whole pass.

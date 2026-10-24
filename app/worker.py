@@ -3,7 +3,7 @@ import secrets
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
-from app import config
+from app import config, reader
 from app.database import db_session
 from app.extractors import generic_rss, substack, youtube
 
@@ -123,7 +123,9 @@ def _fetch_all(jobs: list[tuple], yt_known: set, sub_known: set, rss_known: set,
             if kind == "youtube":
                 payload = youtube.fetch_channel_feed(a, yt_known)
             elif kind == "substack":
-                payload = substack.fetch_feed(a, cookie, sub_known)
+                meta = {}
+                articles = substack.fetch_feed(a, cookie, sub_known, meta)
+                payload = (articles, meta.get("host", ""))
             else:
                 payload = generic_rss.fetch_feed_records(b["url"], b["name"], a, rss_known)
             return job, payload, None
@@ -134,12 +136,17 @@ def _fetch_all(jobs: list[tuple], yt_known: set, sub_known: set, rss_known: set,
         return list(pool.map(fetch, jobs))
 
 
-def _has_data(kind: str, payload) -> bool:
+def _has_data(job: tuple, payload) -> bool:
+    kind = job[0]
     if not payload:
         return False
     if kind == "youtube":
         videos, shorts = payload
         return bool(videos or shorts)
+    if kind == "substack":
+        articles, host = payload
+        # A changed feed host (custom domain) needs a write even with no new posts.
+        return bool(articles) or reader.substack_host_changed(job[1], host)
     return True
 
 
@@ -157,7 +164,7 @@ def _run_cycle_locked() -> dict:
             summary["errors"].append(f"{_label(job)}: {err}")
 
     to_store = [(job, payload) for job, payload, err in fetched
-                if err is None and _has_data(job[0], payload)]
+                if err is None and _has_data(job, payload)]
     if to_store:
         try:
             with db_session() as conn:
@@ -168,7 +175,9 @@ def _run_cycle_locked() -> dict:
                             videos, shorts = payload
                             summary["youtube"] += youtube.store_videos(conn, videos, shorts, b)
                         elif kind == "substack":
-                            summary["substack"] += substack.store_articles(conn, payload)
+                            articles, host = payload
+                            summary["substack"] += substack.store_articles(conn, articles)
+                            reader.record_substack_host(conn, a, host)
                         else:
                             summary[kind] += generic_rss.store_records(conn, payload, a)
                     except Exception as e:

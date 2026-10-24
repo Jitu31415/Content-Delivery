@@ -78,17 +78,23 @@ def _fetch_full_article(url: str, cookie: str) -> str | None:
         return None
 
 
-def fetch_feed(author: str, cookie: str = "", known_ids=frozenset()) -> list[dict]:
+def fetch_feed(author: str, cookie: str = "", known_ids=frozenset(), meta: dict = None) -> list[dict]:
     """Network + parse only. Returns only articles whose id is not in
     `known_ids`. Raises on HTTP errors so a bad author slug appears in the
-    worker summary instead of silently yielding an empty feed."""
-    clean_author = author.strip("/")
-    if "." in clean_author:
-        url = f"https://{clean_author}/feed"
-    else:
-        url = f"https://{clean_author}.substack.com/feed"
+    worker summary instead of silently yielding an empty feed.
+
+    If `meta` is given it receives {"host": <host the feed finally came from>}.
+    A publication with its own domain redirects here, and its article links
+    are on that host (see reader.record_substack_host)."""
+    url = f"https://{author}.substack.com/feed"
     resp = httpx.get(url, headers=_HEADERS, timeout=10.0, follow_redirects=True)
     resp.raise_for_status()
+    if meta is not None:
+        try:
+            final = httpx.URL(str(resp.url))
+            meta["host"] = final.host if final.scheme == "https" and final.port in (None, 443) else ""
+        except Exception:
+            meta["host"] = ""
     parsed = feedparser.parse(resp.content)
 
     articles = []

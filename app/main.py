@@ -4,19 +4,20 @@ from collections import Counter
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from dotenv import load_dotenv
 
 load_dotenv()  # must run before app.config reads any env vars below
 
-from fastapi import FastAPI, Header, HTTPException, Query, Request, Response, BackgroundTasks
-from fastapi.responses import HTMLResponse
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from app import config, worker
+from app import courses as courses_db
 from app import reader
 from app.sandbox import SandboxMiddleware
 from app.database import db_session, init_db
@@ -54,7 +55,8 @@ def _get_or_set_device_id(request: Request, response: Response) -> str:
     return device_id
 
 
-TABS = ["scientific", "music_poetry", "podcast", "religious"]
+# "courses" is not a cached category: /youtube?tab=courses redirects to the Courses page.
+TABS = ["scientific", "music_poetry", "podcast", "religious", "courses"]
 
 # Columns the list pages need. Deliberately excludes `summary`: it can be tens of
 # KB per row, and 40 rows of it would be pulled over the network on every page view.
@@ -78,6 +80,10 @@ VALID_MODULES = {
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    try:
+        reader.load_dynamic_hosts()   # Substack custom-domain hosts recorded by earlier cycles
+    except Exception:
+        pass                          # first run, or database unreachable: fall back to the static allowlist
     # worker.start_scheduler() removed for Render serverless compatibility
     yield
 
@@ -159,6 +165,8 @@ def hub(request: Request):
 
 @app.get("/youtube", response_class=HTMLResponse)
 def youtube_home(request: Request, tab: str = "scientific", page: int = 1):
+    if tab == "courses":
+        return RedirectResponse("/youtube/courses", status_code=303)
     if tab not in TABS:
         tab = TABS[0]
     limit, offset = 30, (page - 1) * 30
@@ -218,6 +226,8 @@ def youtube_search(request: Request, q: str = "", course_mode: bool = False):
 
 @app.get("/youtube/playlist/{playlist_id}", response_class=HTMLResponse)
 def youtube_playlist(request: Request, playlist_id: str):
+    if not courses_db.valid_playlist_id(playlist_id):
+        raise HTTPException(404, "playlist not found")   # also keeps the id out of outbound URL paths
     videos = youtube_extractor.get_playlist_videos(
         playlist_id,
         api_key=config.get_youtube_api_key(),
@@ -250,6 +260,156 @@ def log_click(payload: ClickIn, request: Request, response: Response):
         )
     return {"ok": True}
 
+
+# ---------------------------------------------------------------- courses (per device)
+
+COURSE_MESSAGES = {
+    "invalid": "That does not look like a YouTube playlist link or ID.",
+    "limit": f"You already have {courses_db.MAX_COURSES} courses. Remove one to add another.",
+    "dup": "That course is already in your list.",
+    "fetch": "The playlist could not be read. It may be private, or YouTube may be unavailable. Try again later.",
+    "empty": "That playlist has no playable videos.",
+}
+
+
+async def _form_fields(request: Request) -> dict:
+    """urlencoded form body, parsed by hand: Form() would need python-multipart,
+    a dependency this app does not otherwise have."""
+    raw = await request.body()
+    if len(raw) > 20_000:
+        raise HTTPException(413, "request too large")
+    return {k: v[0] for k, v in parse_qs(raw.decode("utf-8", "replace")).items() if v}
+
+
+def _device(request: Request):
+    device_id = request.cookies.get(DEVICE_ID_COOKIE)
+    return (device_id, False) if device_id else (secrets.token_hex(16), True)
+
+
+def _redirect(url: str, device_id: str, is_new: bool) -> RedirectResponse:
+    resp = RedirectResponse(url, status_code=303)
+    if is_new:
+        _set_device_cookie(resp, device_id)   # on the response actually returned
+    return resp
+
+
+def _owned_course(request: Request, playlist_id: str):
+    """(device_id, course) for this device, or 404. A device without the cookie
+    has no courses; a course id from another device is simply not found."""
+    device_id = request.cookies.get(DEVICE_ID_COOKIE)
+    if not courses_db.valid_playlist_id(playlist_id) or not device_id:
+        raise HTTPException(404, "course not found")
+    with db_session() as conn:
+        course = courses_db.get_course(conn, device_id, playlist_id)
+    if course is None:
+        raise HTTPException(404, "course not found")
+    return device_id, course
+
+
+@app.get("/youtube/courses", response_class=HTMLResponse)
+def courses_home(request: Request, e: str = ""):
+    device_id = request.cookies.get(DEVICE_ID_COOKIE)
+    courses = []
+    if device_id:
+        with db_session() as conn:
+            courses = courses_db.list_courses(conn, device_id)
+    return templates.TemplateResponse(request, "youtube_courses.html", {
+        "courses": courses, "tabs": TABS, "max_courses": courses_db.MAX_COURSES,
+        "slots_left": courses_db.MAX_COURSES - len(courses),
+        "error": COURSE_MESSAGES.get(e),
+    })
+
+
+@app.post("/youtube/courses/add")
+def courses_add(request: Request, fields: dict = Depends(_form_fields)):
+    device_id, is_new = _device(request)
+    pid = courses_db.parse_playlist_id(fields.get("playlist", ""))
+    if pid is None:
+        return _redirect("/youtube/courses?e=invalid", device_id, is_new)
+    with db_session() as conn:   # checked before fetching, so a refused add spends no API quota
+        if courses_db.has_course(conn, device_id, pid):
+            return _redirect("/youtube/courses?e=dup", device_id, is_new)
+        if courses_db.count_courses(conn, device_id) >= courses_db.MAX_COURSES:
+            return _redirect("/youtube/courses?e=limit", device_id, is_new)
+    try:
+        meta, videos = courses_db.fetch_playlist(
+            pid, config.get_youtube_api_key(), config.get_invidious_instances())
+    except courses_db.CourseError as err:
+        return _redirect(f"/youtube/courses?e={err.code}", device_id, is_new)
+    with db_session() as conn:
+        outcome = courses_db.add_course(conn, device_id, pid, meta, videos)
+    if outcome != "ok":
+        return _redirect(f"/youtube/courses?e={outcome}", device_id, is_new)
+    return _redirect(f"/youtube/courses/{pid}", device_id, is_new)
+
+
+@app.get("/youtube/courses/{playlist_id}", response_class=HTMLResponse)
+def course_page(request: Request, playlist_id: str, v: str = ""):
+    device_id, course = _owned_course(request, playlist_id)
+    with db_session() as conn:
+        lessons = courses_db.get_lessons(conn, device_id, playlist_id)
+    index = {l["video_id"]: i for i, l in enumerate(lessons)}
+    chosen = index.get(v) if courses_db.valid_video_id(v) else None
+    if chosen is None:   # no lesson picked: continue with the first unfinished one
+        chosen = next((i for i, l in enumerate(lessons) if not l["done"]), 0)
+    current = lessons[chosen] if lessons else None
+    return templates.TemplateResponse(request, "youtube_course.html", {
+        "course": course, "lessons": lessons, "current": current,
+        "next_lesson": lessons[chosen + 1] if lessons and chosen + 1 < len(lessons) else None,
+        "autoplay": chosen is not None and v in index, "tabs": TABS,
+        "error": COURSE_MESSAGES.get(request.query_params.get("e", "")),
+    })
+
+
+@app.post("/youtube/courses/{playlist_id}/toggle")
+def course_toggle(request: Request, playlist_id: str, fields: dict = Depends(_form_fields)):
+    device_id, _course = _owned_course(request, playlist_id)
+    video_id = fields.get("video_id", "")
+    if not courses_db.valid_video_id(video_id):
+        raise HTTPException(400, "bad video id")
+    with db_session() as conn:
+        if not courses_db.set_done(conn, device_id, playlist_id, video_id, fields.get("done") == "1"):
+            raise HTTPException(404, "lesson not found")
+    return RedirectResponse(f"/youtube/courses/{playlist_id}#l-{video_id}", status_code=303)
+
+
+class ProgressIn(BaseModel):
+    video_id: str = ""
+    done: bool = True
+
+
+@app.post("/youtube/courses/{playlist_id}/progress")
+def course_progress(request: Request, playlist_id: str, payload: ProgressIn):
+    """Called by the player page when a lesson ends or passes 90%."""
+    device_id, _course = _owned_course(request, playlist_id)
+    if not courses_db.valid_video_id(payload.video_id):
+        raise HTTPException(400, "bad video id")
+    with db_session() as conn:
+        if not courses_db.set_done(conn, device_id, playlist_id, payload.video_id, payload.done):
+            raise HTTPException(404, "lesson not found")
+        course = courses_db.get_course(conn, device_id, playlist_id)
+    return {"ok": True, "done": course["done"], "total": course["total"], "percent": course["percent"]}
+
+
+@app.post("/youtube/courses/{playlist_id}/remove")
+def course_remove(request: Request, playlist_id: str):
+    device_id, _course = _owned_course(request, playlist_id)
+    with db_session() as conn:
+        courses_db.remove_course(conn, device_id, playlist_id)
+    return RedirectResponse("/youtube/courses", status_code=303)
+
+
+@app.post("/youtube/courses/{playlist_id}/refresh")
+def course_refresh(request: Request, playlist_id: str):
+    device_id, _course = _owned_course(request, playlist_id)
+    try:
+        meta, videos = courses_db.fetch_playlist(
+            playlist_id, config.get_youtube_api_key(), config.get_invidious_instances())
+    except courses_db.CourseError as err:
+        return RedirectResponse(f"/youtube/courses/{playlist_id}?e={err.code}", status_code=303)
+    with db_session() as conn:
+        courses_db.refresh_course(conn, device_id, playlist_id, meta, videos)
+    return RedirectResponse(f"/youtube/courses/{playlist_id}", status_code=303)
 
 # ---------------------------------------------------------------- youtube history
 # Separate tab, not the "jump back in" strip that used to sit on /youtube —

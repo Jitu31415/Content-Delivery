@@ -41,6 +41,7 @@ This is an unauthenticated endpoint, so it is hardened as a proxy:
 
 import html as _html
 import ipaddress
+import json
 import os
 import re
 import socket
@@ -52,6 +53,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 from app import config
+from app.database import db_session
 
 READ_PATH = "/read"
 MAX_BYTES = 3_000_000
@@ -97,7 +99,34 @@ def derive_hosts(sources: dict, extra=()) -> frozenset:
     return frozenset(hosts)
 
 
-_cache = {"key": None, "hosts": frozenset()}
+_cache = {"key": None, "hosts": frozenset(), "authors": ()}
+
+# Substack publications that use their own domain: "<author>.substack.com/feed"
+# redirects there, so their article links are on a host derive_hosts() cannot
+# know. The worker records the feed's final host here (author -> host).
+# Trust model: the user chose the author slug, and a custom domain can only be
+# attached by whoever controls that domain, so the redirect target is as
+# trusted as the slug itself. It is not derived from item URLs, which a feed
+# controls. Held in memory (the middleware must not touch the database) and
+# persisted in system_state so it survives restarts.
+_DYN_KEY = "reader_hosts_dynamic"
+_dyn = {"map": {}}
+_HOSTNAME = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$")
+
+
+def _clean_host(host) -> str:
+    host = (host or "").strip().lower().rstrip(".")
+    if len(host) > 253 or not _HOSTNAME.match(host):
+        return ""
+    try:
+        ipaddress.ip_address(host)
+        return ""                      # IP literals are never allowed
+    except ValueError:
+        return host
+
+
+def _dynamic_for(authors) -> frozenset:
+    return frozenset(h for a, h in _dyn["map"].items() if a in authors)
 
 
 def allowed_hosts() -> frozenset:
@@ -115,8 +144,52 @@ def allowed_hosts() -> frozenset:
         except Exception:
             sources = {}
         _cache["hosts"] = derive_hosts(sources, extra)
+        _cache["authors"] = tuple(sources.get("substack") or [])
         _cache["key"] = key
-    return _cache["hosts"]
+    return _cache["hosts"] | _dynamic_for(_cache["authors"])
+
+
+def load_dynamic_hosts() -> None:
+    """Called once at startup."""
+    with db_session() as conn:
+        row = conn.execute("SELECT val FROM system_state WHERE key = ?", (_DYN_KEY,)).fetchone()
+    loaded = {}
+    if row and row["val"]:
+        try:
+            for author, host in json.loads(row["val"]).items():
+                if _clean_host(host):
+                    loaded[str(author)] = _clean_host(host)
+        except (ValueError, AttributeError):
+            loaded = {}
+    _dyn["map"] = loaded
+
+
+def _next_map(author: str, host) -> dict:
+    new = dict(_dyn["map"])
+    host = _clean_host(host)
+    if not host or host == f"{author}.substack.com":
+        new.pop(author, None)
+    else:
+        new[author] = host
+    return new
+
+
+def substack_host_changed(author: str, host) -> bool:
+    """Memory-only check, so the worker can skip opening a write session."""
+    return _next_map(author, host) != _dyn["map"]
+
+
+def record_substack_host(conn, author: str, host) -> bool:
+    new = _next_map(author, host)
+    if new == _dyn["map"]:
+        return False
+    conn.execute(
+        "INSERT INTO system_state (key, val) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET val = excluded.val",
+        (_DYN_KEY, json.dumps(new)),
+    )
+    _dyn["map"] = new
+    return True
 
 
 def host_allowed(host, allowed) -> bool:
