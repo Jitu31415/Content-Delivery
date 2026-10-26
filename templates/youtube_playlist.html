@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% from "_macros.html" import add_course %}
+{% block title %}Playlist — reading room{% endblock %}
+{% block content %}
+<header class="page-head">
+  <h1>Playlist</h1>
+  <div class="actions">{{ add_course(playlist_id) }}</div>
+</header>
+{% include "_yt_tabs.html" %}
+<ul class="vgrid">
+  {% for v in videos %}
+  <li class="vcard">
+    <button type="button" class="vthumb" data-play data-video-id="{{ v.Video_ID }}" data-title="{{ v.Title }}" aria-label="Play {{ v.Title }}">
+      {% if v.Thumbnail %}<img src="{{ v.Thumbnail }}" alt="" loading="lazy" decoding="async">{% endif %}<span class="play">&#9654;</span>
+    </button>
+    <div class="vmeta">
+      <span class="vtitle">{{ v.Title }}</span>
+      <span class="card-meta"><span class="chip">{{ v.Channel }}</span></span>
+    </div>
+  </li>
+  {% endfor %}
+</ul>
+<p class="course-note">Adding it as a course lets you tick lessons off and see your progress. Progress stays on this device.</p>
+{% endblock %}

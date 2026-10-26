@@ -1,0 +1,4 @@
+<nav class="pills" aria-label="YouTube sections">
+  {% for t in tabs %}<a class="pill{{ ' on' if t == active_tab else '' }}" href="{{ '/youtube/courses' if t == 'courses' else '/youtube?tab=' ~ t }}">{{ t|replace('_', ' ') }}</a>{% endfor %}
+  <a class="pill{{ ' on' if active_tab == 'history' else '' }}" href="/youtube/history">History</a>
+</nav>

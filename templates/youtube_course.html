@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block title %}{{ course.title }} — reading room{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div>
+    <h1>{{ course.title }}</h1>
+    <p class="sub">{{ course.channel }}</p>
+  </div>
+  <div class="actions"><a class="btn ghost small" href="/youtube/courses">&larr; Courses</a></div>
+</header>
+
+{% if error %}<p class="course-err">{{ error }}</p>{% endif %}
+
+<div class="cbar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ course.percent }}"><span id="bar-fill" style="width: {{ course.percent }}%"></span></div>
+<div class="cpct" id="pct-text">{{ course.percent }}% complete · {{ course.done }} of {{ course.total }} lessons</div>
+
+{% if current %}
+<div id="course" data-pid="{{ course.playlist_id }}" data-vid="{{ current.video_id }}"
+     data-autoplay="{{ '1' if autoplay else '0' }}" data-done="{{ '1' if current.done else '0' }}" style="margin-top: 1rem">
+  <div class="player-wrap"><div id="player"></div></div>
+</div>
+<p class="now">Lesson {{ current.n }} of {{ course.total }}: {{ current.title }}</p>
+<p class="course-note" id="auto-note">{% if current.done %}Marked complete.{% else %}Marked complete automatically when it ends or passes 90%.{% endif %}</p>
+{% if next_lesson %}
+<a class="next-link" href="/youtube/courses/{{ course.playlist_id }}?v={{ next_lesson.video_id }}">Next lesson &rarr;</a>
+{% endif %}
+{% endif %}
+
+<ul class="lessons">
+  {% for l in lessons %}
+  <li class="lesson{{ ' done' if l.done else '' }}{{ ' current' if current and l.video_id == current.video_id else '' }}" id="l-{{ l.video_id }}">
+    <a class="lt" href="/youtube/courses/{{ course.playlist_id }}?v={{ l.video_id }}"><span class="n">{{ l.n }}</span>{{ l.title }}</a>
+    <form method="post" action="/youtube/courses/{{ course.playlist_id }}/toggle">
+      <input type="hidden" name="video_id" value="{{ l.video_id }}">
+      <input type="hidden" name="done" value="{{ '0' if l.done else '1' }}">
+      <button type="submit" class="state" aria-label="{{ 'Mark not complete' if l.done else 'Mark complete' }}">{{ '✓' if l.done else '○' }}</button>
+    </form>
+  </li>
+  {% endfor %}
+</ul>
+
+<div class="course-tools">
+  <form method="post" action="/youtube/courses/{{ course.playlist_id }}/refresh"><button type="submit" class="btn ghost small">Refresh lesson list</button></form>
+  <form method="post" action="/youtube/courses/{{ course.playlist_id }}/remove"
+        onsubmit="return confirm('Remove this course and its progress from this device?')"><button type="submit" class="btn ghost small">Remove course</button></form>
+</div>
+<p class="course-note">Progress is stored on this device only.</p>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var root = document.getElementById('course');
+  if (!root) return;
+  var pid = root.dataset.pid, vid = root.dataset.vid;
+  var autoplay = root.dataset.autoplay === '1';
+  var marked = root.dataset.done === '1', timer = null, player = null;
+
+  function paint(d) {
+    var fill = document.getElementById('bar-fill'), txt = document.getElementById('pct-text');
+    var row = document.getElementById('l-' + vid), note = document.getElementById('auto-note');
+    if (fill) fill.style.width = d.percent + '%';
+    if (txt) txt.textContent = d.percent + '% complete \u00b7 ' + d.done + ' of ' + d.total + ' lessons';
+    if (row) {
+      row.className = row.className.indexOf('done') < 0 ? row.className + ' done' : row.className;
+      var b = row.querySelector('.state'); if (b) b.textContent = '\u2713';
+      var h = row.querySelector('input[name=done]'); if (h) h.value = '0';
+    }
+    if (note) note.textContent = 'Marked complete.';
+  }
+  function mark() {
+    if (marked) return;
+    marked = true;
+    fetch('/youtube/courses/' + encodeURIComponent(pid) + '/progress', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({video_id: vid, done: true})
+    }).then(function (r) { if (!r.ok) throw new Error('save failed'); return r.json(); })
+      .then(paint)
+      .catch(function () { marked = false; });      // allow a retry on the next event
+  }
+  function tick() {
+    try {
+      var dur = player.getDuration(), t = player.getCurrentTime();
+      if (dur > 0 && t / dur >= 0.9) mark();
+    } catch (e) {}
+  }
+  window.onYouTubeIframeAPIReady = function () {
+    player = new YT.Player('player', {
+      videoId: vid, host: 'https://www.youtube-nocookie.com',
+      playerVars: {rel: 0, modestbranding: 1, playsinline: 1, autoplay: autoplay ? 1 : 0, origin: location.origin},
+      events: {onStateChange: function (e) {
+        if (e.data === 0) mark();                                   // ended
+        if (e.data === 1 && !timer) timer = setInterval(tick, 5000); // playing
+        if (e.data !== 1 && timer) { clearInterval(timer); timer = null; }
+      }}
+    });
+  };
+  var s = document.createElement('script');
+  s.src = 'https://www.youtube.com/iframe_api';
+  document.head.appendChild(s);
+})();
+</script>
+{% endblock %}

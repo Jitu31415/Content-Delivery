@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% from "_macros.html" import rss_card, sub_card, vcard %}
+{% block title %}{{ q if q else 'Search' }} — reading room{% endblock %}
+{% block content %}
+<header class="page-head"><h1>Search</h1></header>
+<form class="searchbar" action="/search" method="get">
+  <input class="input" type="search" name="q" value="{{ q }}" placeholder="Search titles and sources" autocomplete="off">
+  <label class="check"><input type="checkbox" name="deep" value="true"{{ ' checked' if deep else '' }}> Search inside the text (slower)</label>
+  <button type="submit" class="btn">Search</button>
+</form>
+{% if results is none %}
+<p class="sub">Searches what is already stored: articles, newsletters and videos.</p>
+{% elif not total %}
+<p class="empty">Nothing found{% if not results.terms %}. Use at least two letters per word{% endif %}.</p>
+{% else %}
+{% if results.articles %}<h2 class="section-title">Articles ({{ results.articles|length }})</h2>
+<ul class="cards">{% for i in results.articles %}{{ rss_card(i, dots=False) }}{% endfor %}</ul>{% endif %}
+{% if results.substack %}<h2 class="section-title">Substack ({{ results.substack|length }})</h2>
+<ul class="cards">{% for a in results.substack %}{{ sub_card(a, dots=False) }}{% endfor %}</ul>{% endif %}
+{% if results.videos %}<h2 class="section-title">Videos ({{ results.videos|length }})</h2>
+<ul class="vgrid">{% for v in results.videos %}{{ vcard(v) }}{% endfor %}</ul>{% endif %}
+{% endif %}
+{% endblock %}

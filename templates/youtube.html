@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% from "_macros.html" import vcard, add_course %}
+{% block title %}YouTube — reading room{% endblock %}
+{% block content %}
+<header class="page-head"><h1>YouTube</h1></header>
+{% include "_yt_tabs.html" %}
+
+<form class="searchbar" action="/youtube/search" method="get">
+  <input class="input" type="search" name="q" value="{{ query }}" placeholder="Search lectures and courses" autocomplete="off">
+  <label class="check"><input type="checkbox" name="course_mode" value="true"{{ ' checked' if course_mode else '' }}> Courses (playlists)</label>
+  <button type="submit" class="btn">Search</button>
+</form>
+
+{% if error %}<p class="banner err">Search failed: {{ error }}</p>{% endif %}
+{% if degraded %}<p class="banner warn">Showing results from a backup source, so they are less carefully filtered.</p>{% endif %}
+
+{% if search_results is not none %}
+  {% if search_results %}
+  <ul class="vgrid">
+    {% for r in search_results %}
+    <li class="vcard">
+      {% if r.Type == 'Playlist' %}
+      <a class="vthumb" href="/youtube/playlist/{{ r.ID }}" aria-label="Open playlist {{ r.Title }}">
+        {% if r.Thumbnail %}<img src="{{ r.Thumbnail }}" alt="" loading="lazy" decoding="async">{% endif %}<span class="play">&#9776;</span>
+      </a>
+      {% else %}
+      <button type="button" class="vthumb" data-play data-video-id="{{ r.ID }}" data-title="{{ r.Title }}" aria-label="Play {{ r.Title }}">
+        {% if r.Thumbnail %}<img src="{{ r.Thumbnail }}" alt="" loading="lazy" decoding="async">{% endif %}<span class="play">&#9654;</span>
+      </button>
+      {% endif %}
+      <div class="vmeta">
+        <span class="vtitle">{{ r.Title }}</span>
+        <span class="card-meta"><span class="chip">{{ r.Channel }}</span><span>{{ r.Type }}</span></span>
+      </div>
+      {% if r.Type == 'Playlist' %}{{ add_course(r.ID) }}{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="empty">No results for &ldquo;{{ query }}&rdquo;.</p>
+  {% endif %}
+{% else %}
+  <ul class="vgrid">{% for v in videos %}{{ vcard(v) }}{% else %}<li class="empty">No videos cached yet for this tab.</li>{% endfor %}</ul>
+  <div class="pager">
+    {% if page > 1 %}<a class="btn ghost" href="/youtube?tab={{ active_tab }}&amp;page={{ page - 1 }}">&larr; Newer</a>{% else %}<span></span>{% endif %}
+    {% if videos|length == 30 %}<a class="btn ghost" href="/youtube?tab={{ active_tab }}&amp;page={{ page + 1 }}">Older &rarr;</a>{% endif %}
+  </div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% from "_macros.html" import rss_card, sub_card, vcard %}
+{% block title %}Saved — reading room{% endblock %}
+{% block content %}
+<header class="page-head"><h1>Saved</h1></header>
+<nav class="pills" aria-label="Saved sections">
+  <a class="pill{{ ' on' if tab == 'articles' else '' }}" href="/saved?tab=articles">Articles ({{ counts.articles }})</a>
+  <a class="pill{{ ' on' if tab == 'substack' else '' }}" href="/saved?tab=substack">Substack ({{ counts.substack }})</a>
+  <a class="pill{{ ' on' if tab == 'videos' else '' }}" href="/saved?tab=videos">Videos ({{ counts.videos }})</a>
+</nav>
+{% if tab == 'videos' %}
+<ul class="vgrid">{% for v in data.videos %}{{ vcard(v) }}{% else %}<li class="empty">No saved videos. Tap the star on a video to keep it here.</li>{% endfor %}</ul>
+{% elif tab == 'substack' %}
+<ul class="cards">{% for a in data.substack %}{{ sub_card(a, dots=False) }}{% else %}<li class="empty">No saved articles. Tap the star on a newsletter to keep it here.</li>{% endfor %}</ul>
+{% else %}
+<ul class="cards">{% for i in data.articles %}{{ rss_card(i, dots=False) }}{% else %}<li class="empty">Nothing saved yet. Tap the star on an item to keep it here.</li>{% endfor %}</ul>
+{% endif %}
+{% endblock %}

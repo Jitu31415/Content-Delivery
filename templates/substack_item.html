@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}{{ item.title }} — reading room{% endblock %}
+{% block content %}
+<article class="reading">
+  <div class="reading-bar">
+    <button type="button" class="btn ghost small" data-back>&larr; Back</button>
+    <a class="btn ghost small" href="/substack">Substack</a>
+  </div>
+  <header class="reading-head">
+    <div class="kicker">{{ item.author }}</div>
+    <h1>{{ item.title }}</h1>
+    <div class="reading-meta">
+      <span>{{ item.published_date|ago }}</span>
+      {% if minutes %}<span>{{ minutes }} min read</span>{% endif %}
+      <button type="button" class="save-btn" data-module="substack" data-id="{{ item.article_id }}" aria-label="Save" aria-pressed="{{ 'true' if item.is_saved else 'false' }}">{{ '★' if item.is_saved else '☆' }}</button>
+    </div>
+  </header>
+  {% if body %}
+  <div class="prose item-summary">{{ body|safe }}</div>
+  {% else %}
+  <p class="empty">No text was stored for this article.</p>
+  {% endif %}
+  {% if reader_link %}
+  <p class="reading-foot"><a class="btn ghost" href="{{ reader_link }}">Open the original in reader view</a></p>
+  {% endif %}
+</article>
+{% endblock %}

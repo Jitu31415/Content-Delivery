@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}History — reading room{% endblock %}
+{% block content %}
+<header class="page-head">
+  <h1>Watch history</h1>
+  {% if entries %}<div class="actions"><button type="button" class="btn ghost" data-history-clear data-target="#hist">Clear all</button></div>{% endif %}
+</header>
+{% include "_yt_tabs.html" %}
+<p class="course-note">Only videos played on this device are listed here.</p>
+<ul class="hist" id="hist">
+  {% for e in entries %}
+  <li data-history-id="{{ e.id }}">
+    <button type="button" class="ht" data-play data-video-id="{{ e.video_id }}" data-title="{{ e.title }}">{{ e.title or e.video_id }}</button>
+    <span class="when">{{ e.accessed_at|ago }}</span>
+    <button type="button" class="del" data-history-delete data-id="{{ e.id }}" aria-label="Remove from history">&times;</button>
+  </li>
+  {% else %}
+  <li class="empty">Nothing here yet. Videos you play will appear here.</li>
+  {% endfor %}
+</ul>
+<div class="pager">
+  {% if page > 1 %}<a class="btn ghost" href="/youtube/history?page={{ page - 1 }}">&larr; Newer</a>{% else %}<span></span>{% endif %}
+  {% if entries|length == 30 %}<a class="btn ghost" href="/youtube/history?page={{ page + 1 }}">Older &rarr;</a>{% endif %}
+</div>
+{% endblock %}

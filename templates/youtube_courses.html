@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Courses — reading room{% endblock %}
+{% block content %}
+<header class="page-head"><h1>Courses</h1></header>
+{% include "_yt_tabs.html" %}
+
+{% if error %}<p class="course-err">{{ error }}</p>{% endif %}
+
+<ul class="course-list">
+  {% for c in courses %}
+  <li class="course-card">
+    <a class="cc" href="/youtube/courses/{{ c.playlist_id }}">
+      <img src="https://i.ytimg.com/vi/{{ c.thumb_video }}/mqdefault.jpg" alt="" loading="lazy">
+      <span>
+        <div class="ct">{{ c.title }}</div>
+        <div class="cm">{{ c.channel }} · {{ c.total }} lessons</div>
+      </span>
+    </a>
+    <div class="cbar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ c.percent }}"><span style="width: {{ c.percent }}%"></span></div>
+    <div class="cpct">{{ c.percent }}% complete · {{ c.done }} of {{ c.total }} lessons</div>
+  </li>
+  {% else %}
+  <li class="empty">No courses yet. Paste a YouTube playlist link below to start one.</li>
+  {% endfor %}
+</ul>
+
+{% if slots_left > 0 %}
+<form class="course-add" method="post" action="/youtube/courses/add">
+  <input class="input" type="text" name="playlist" placeholder="YouTube playlist link or ID" autocomplete="off" required>
+  <button type="submit" class="btn">Add course</button>
+</form>
+<p class="course-note">{{ courses|length }} of {{ max_courses }} courses. Progress is stored on this device only.</p>
+{% else %}
+<p class="course-note">You have all {{ max_courses }} courses. Remove one to add another. Progress is stored on this device only.</p>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% from "_macros.html" import sub_card %}
+{% block title %}Substack — reading room{% endblock %}
+{% block content %}
+<header class="page-head">
+  <h1>Substack</h1>
+  <div class="actions">
+    {% if has_device %}<a class="btn ghost{{ ' on' if unread else '' }}" href="/substack{% if not unread %}?unread=1{% endif %}">{{ 'All articles' if unread else 'Unread only' }}</a>{% endif %}
+    {% if articles %}<button type="button" class="btn ghost" data-mark-read data-kind="substack" data-target="#feed">Mark all read</button>{% endif %}
+  </div>
+</header>
+<ul class="cards" id="feed">
+  {% for a in articles %}{{ sub_card(a) }}{% else %}
+  <li class="empty">{{ 'Nothing unread here.' if unread else 'No articles cached yet.' }}</li>
+  {% endfor %}
+</ul>
+<div class="pager">
+  {% if page > 1 %}<a class="btn ghost" href="/substack?page={{ page - 1 }}{% if unread %}&amp;unread=1{% endif %}">&larr; Newer</a>{% else %}<span></span>{% endif %}
+  {% if articles|length == page_size %}<a class="btn ghost" href="/substack?page={{ page + 1 }}{% if unread %}&amp;unread=1{% endif %}">Older &rarr;</a>{% endif %}
+</div>
+{% endblock %}

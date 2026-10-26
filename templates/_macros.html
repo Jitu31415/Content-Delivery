@@ -1,0 +1,44 @@
+{% macro star(module, id, saved) -%}
+<button type="button" class="save-btn" data-module="{{ module }}" data-id="{{ id }}" aria-label="Save" aria-pressed="{{ 'true' if saved else 'false' }}">{{ '★' if saved else '☆' }}</button>
+{%- endmacro %}
+
+{% macro rss_card(i, dots=True) -%}
+<li class="card{{ ' unread' if dots and not i.read else '' }}" data-item-id="{{ i.item_id }}">
+  <a class="card-main" href="/item?id={{ i.item_id|urlencode }}">
+    <span class="card-title">{{ i.title }}</span>
+    <span class="card-meta"><span class="chip">{{ i.source_name }}</span><span>{{ i.published_date|ago }}</span></span>
+  </a>
+  {{ star('rss', i.item_id, i.is_saved) }}
+</li>
+{%- endmacro %}
+
+{% macro sub_card(a, dots=True) -%}
+<li class="card{{ ' unread' if dots and not a.read else '' }}" data-item-id="{{ a.article_id }}">
+  <a class="card-main" href="/substack/item?id={{ a.article_id|urlencode }}">
+    <span class="card-title">{{ a.title }}</span>
+    {% if a.excerpt %}<span class="card-excerpt">{{ a.excerpt }}</span>{% endif %}
+    <span class="card-meta"><span class="chip">{{ a.author }}</span><span>{{ a.published_date|ago }}</span></span>
+  </a>
+  {{ star('substack', a.article_id, a.is_saved) }}
+</li>
+{%- endmacro %}
+
+{% macro vcard(v) -%}
+<li class="vcard">
+  <button type="button" class="vthumb" data-play data-video-id="{{ v.video_id }}" data-title="{{ v.title }}" aria-label="Play {{ v.title }}">
+    {% if v.thumbnail_url %}<img src="{{ v.thumbnail_url }}" alt="" loading="lazy" decoding="async">{% endif %}<span class="play">&#9654;</span>
+  </button>
+  <div class="vmeta">
+    <span class="vtitle">{{ v.title }}</span>
+    <span class="card-meta"><span class="chip">{{ v.channel_name }}</span><span>{{ v.published_date|ago }}</span></span>
+  </div>
+  {{ star('youtube', v.video_id, v.is_saved) }}
+</li>
+{%- endmacro %}
+
+{% macro add_course(playlist_id) -%}
+<form method="post" action="/youtube/courses/add" class="vcard-actions">
+  <input type="hidden" name="playlist" value="{{ playlist_id }}">
+  <button type="submit" class="btn ghost small">Add as course</button>
+</form>
+{%- endmacro %}
