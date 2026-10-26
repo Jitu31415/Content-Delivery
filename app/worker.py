@@ -3,7 +3,7 @@ import secrets
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
-from app import config, reader
+from app import cache, config, reader
 from app.database import db_session
 from app.extractors import generic_rss, substack, youtube
 
@@ -193,6 +193,7 @@ def _run_cycle_locked() -> dict:
              "ok" if not summary["errors"] else "partial", str(summary)),
         )
 
+    cache.clear()   # list pages must show what this cycle just stored
     logger.info("worker cycle complete: %s", summary)
     return summary
 
@@ -234,6 +235,9 @@ def _prune(conn) -> dict:
         (f"-{SUBSTACK_RETENTION_DAYS} days",),
     )
     counts["substack_cache"] = deleted(cur)
+
+    cur = conn.execute("DELETE FROM read_items WHERE read_at < date('now', ?)", (f"-{YOUTUBE_RETENTION_DAYS} days",))
+    counts["read_items"] = deleted(cur)
 
     return counts
 

@@ -1,43 +1,29 @@
 {% extends "base.html" %}
+{% from "_macros.html" import rss_card %}
 {% block title %}{{ module_name }} — reading room{% endblock %}
 {% block content %}
-<section class="module">
-  <h2 class="section-label">{{ module_name }}</h2>
-  
-  {% if tabs %}
-  <nav class="tabs" style="margin-bottom: 20px; border-bottom: 1px solid #ccc; padding-bottom: 10px;">
-    {% for t in tabs %}
-    <a href="/{{ module_slug }}?tab={{ t }}" style="margin-right: 15px; text-transform: capitalize; text-decoration: none; 
-            font-weight: {{ 'bold' if t == active_tab else 'normal' }};
-            color: {{ '#000' if t == active_tab else '#666' }};">
-      {{ t }}
-    </a>
-    {% endfor %}
-  </nav>
-  {% endif %}
-
-  <ul class="feed-list">
-    {% for i in items %}
-    <li class="feed-item">
-      <a href="/item?id={{ i.item_id|urlencode }}">
-        <span class="feed-title">{{ i.title }}</span>
-        <span class="feed-meta">{{ i.source_name }} · {{ i.published_date }}</span>
-      </a>
-      <button class="save-btn" data-module="rss" data-id="{{ i.item_id }}">{{ '★' if i.is_saved else '☆' }}</button>
-    </li>
-    {% else %}
-    <li class="empty">no items cached yet</li>
-    {% endfor %}
-  </ul>
-
-  <div class="pager">
-    {% if page > 1 %}
-      <a href="/{{ module_slug }}?page={{ page - 1 }}{% if active_tab %}&tab={{ active_tab }}{% endif %}">&larr; prev</a>
-    {% endif %}
-    {% if items|length == 40 %}
-      <a href="/{{ module_slug }}?page={{ page + 1 }}{% if active_tab %}&tab={{ active_tab }}{% endif %}">next &rarr;</a>
-    {% endif %}
+<header class="page-head">
+  <h1>{{ module_name }}</h1>
+  <div class="actions">
+    {% if has_device %}<a class="btn ghost{{ ' on' if unread else '' }}" href="/{{ module_slug }}?{% if active_tab %}tab={{ active_tab }}&amp;{% endif %}{% if not unread %}unread=1{% endif %}">{{ 'All items' if unread else 'Unread only' }}</a>{% endif %}
+    {% if items %}<button type="button" class="btn ghost" data-mark-read data-kind="rss" data-target="#feed">Mark all read</button>{% endif %}
   </div>
-</section>
-<script src="/static/app.js"></script>
+</header>
+
+{% if tabs %}
+<nav class="pills" aria-label="{{ module_name }} sections">
+  {% for t in tabs %}<a class="pill{{ ' on' if t == active_tab else '' }}" href="/{{ module_slug }}?tab={{ t }}">{{ t }}</a>{% endfor %}
+</nav>
+{% endif %}
+
+<ul class="cards" id="feed">
+  {% for i in items %}{{ rss_card(i) }}{% else %}
+  <li class="empty">{{ 'Nothing unread here.' if unread else 'No items cached yet.' }}</li>
+  {% endfor %}
+</ul>
+
+<div class="pager">
+  {% if page > 1 %}<a class="btn ghost" href="/{{ module_slug }}?page={{ page - 1 }}{% if active_tab %}&amp;tab={{ active_tab }}{% endif %}{% if unread %}&amp;unread=1{% endif %}">&larr; Newer</a>{% else %}<span></span>{% endif %}
+  {% if items|length == page_size %}<a class="btn ghost" href="/{{ module_slug }}?page={{ page + 1 }}{% if active_tab %}&amp;tab={{ active_tab }}{% endif %}{% if unread %}&amp;unread=1{% endif %}">Older &rarr;</a>{% endif %}
+</div>
 {% endblock %}

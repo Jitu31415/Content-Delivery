@@ -1,28 +1,56 @@
 {% extends "base.html" %}
+{% from "_macros.html" import rss_card %}
 {% block title %}reading room{% endblock %}
 {% block content %}
-<section class="hub">
-  <p class="hub-lede">It is through learning that we transcend our minds and become more than we ever were. So,welcome to be platform where
-    learning is not dictated by others but by yourself. Because it is not how many books you have gone through that matters but how many of them 
-    have gone through you.
-  </p>
-  <div class="hub-grid">
-    <a class="hub-node" href="/youtube">
-      <span class="hub-label">youtube</span>
-      <span class="hub-desc">You see what you decide to see</span>
-    </a>
-    <a class="hub-node" href="/substack">
-      <span class="hub-label">substack</span>
-      <span class="hub-desc">subscribed authors, full text</span>
-    </a>
-    <a class="hub-node" href="/news">
-      <span class="hub-label">news</span>
-      <span class="hub-desc">wire feeds, chronological</span>
-    </a>
-    <a class="hub-node" href="/papers">
-      <span class="hub-label">papers &amp; articles</span>
-      <span class="hub-desc">journal RSS — arXiv, Nature</span>
-    </a>
-  </div>
+<section class="hero">
+  <h1>Your reading room</h1>
+  <p class="sub">Only what you chose to follow.</p>
 </section>
+
+<nav class="tiles" aria-label="Sections">
+  <a class="tile" href="/papers"><span class="tile-name">Library</span><span class="tile-sub">Papers and blogs</span>
+    {% set n = unread.get('Paper', 0) + unread.get('Blog', 0) %}{% if n %}<span class="badge">{{ n }}</span>{% endif %}</a>
+  <a class="tile" href="/news"><span class="tile-name">News</span><span class="tile-sub">Today's headlines</span>
+    {% if unread.get('News') %}<span class="badge">{{ unread.get('News') }}</span>{% endif %}</a>
+  <a class="tile" href="/substack"><span class="tile-name">Substack</span><span class="tile-sub">Newsletters</span>
+    {% if unread.get('substack') %}<span class="badge">{{ unread.get('substack') }}</span>{% endif %}</a>
+  <a class="tile" href="/youtube"><span class="tile-name">YouTube</span><span class="tile-sub">Lectures and talks</span></a>
+  <a class="tile" href="/youtube/courses"><span class="tile-name">Courses</span><span class="tile-sub">Track your progress</span></a>
+  <a class="tile" href="/saved"><span class="tile-name">Saved</span><span class="tile-sub">Starred items</span>
+    {% if saved_count %}<span class="badge">{{ saved_count }}</span>{% endif %}</a>
+</nav>
+
+{% if recent %}
+<h2 class="section-title">Continue reading</h2>
+<ul class="cards">
+  {% for r in recent %}
+  <li class="card">
+    <a class="card-main" href="{{ '/substack/item?id=' ~ (r.item_id|urlencode) if r.kind == 'substack' else '/item?id=' ~ (r.item_id|urlencode) }}">
+      <span class="card-title">{{ r.title }}</span>
+      <span class="card-meta"><span class="chip">{{ r.source }}</span><span>opened {{ r.read_at|ago }}</span></span>
+    </a>
+  </li>
+  {% endfor %}
+</ul>
+{% endif %}
+
+{% if courses %}
+<h2 class="section-title">Courses in progress</h2>
+<ul class="course-list">
+  {% for c in courses %}
+  <li class="course-card">
+    <a class="cc" href="/youtube/courses/{{ c.playlist_id }}">
+      <img src="https://i.ytimg.com/vi/{{ c.thumb_video }}/mqdefault.jpg" alt="" loading="lazy">
+      <span><div class="ct">{{ c.title }}</div><div class="cm">{{ c.percent }}% complete &middot; {{ c.done }} of {{ c.total }} lessons</div></span>
+    </a>
+    <div class="cbar"><span style="width: {{ c.percent }}%"></span></div>
+  </li>
+  {% endfor %}
+</ul>
+{% endif %}
+
+{% if latest %}
+<h2 class="section-title">Latest</h2>
+<ul class="cards">{% for i in latest %}{{ rss_card(i, dots=has_device) }}{% endfor %}</ul>
+{% endif %}
 {% endblock %}

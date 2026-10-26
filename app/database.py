@@ -14,7 +14,7 @@ TURSO_AUTH_TOKEN = os.getenv("TURSO_AUTH_TOKEN")
 # because on Turso the schema persists across container restarts and
 # re-running ~20 remote DDL statements on every cold start delays port
 # binding (uvicorn does not listen until lifespan startup returns).
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def dict_factory(cursor, row):
@@ -207,6 +207,15 @@ def init_db():
             )
         """)
 
+        # Per-device read state (see app/reading.py). opened = 1 when the reader opened
+        # the item, 0 when it was bulk-marked, so bulk marks stay out of "continue reading".
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS read_items (
+                device_id TEXT, kind TEXT, item_id TEXT, read_at TEXT, opened INTEGER DEFAULT 1,
+                PRIMARY KEY (device_id, kind, item_id)
+            )
+        """)
+
         # --- migration pass: reconciles tables that already existed before
         # these fixes, on your live Turso database, with a schema that had
         # already drifted out from under them.
@@ -230,6 +239,7 @@ def init_db():
         conn.execute("CREATE INDEX IF NOT EXISTS ix_sub_date ON substack_cache(published_date DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS ix_hist_dev ON user_history(device_id, accessed_at DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS ix_cv_video ON course_videos(device_id, playlist_id, video_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_read_recent ON read_items(device_id, opened, read_at DESC)")
 
         # Written last, inside the same session: a failure above leaves the
         # version unset, so the next start retries the whole pass.

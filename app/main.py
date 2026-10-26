@@ -1,4 +1,7 @@
+import hashlib
+import html as _html
 import os
+import re
 import secrets
 from collections import Counter
 from contextlib import asynccontextmanager
@@ -14,18 +17,68 @@ from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Qu
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel
 
 from app import config, worker
+from app import cache, reading
 from app import courses as courses_db
 from app import reader
 from app.sandbox import SandboxMiddleware
 from app.database import db_session, init_db
 from app.extractors import generic_rss
+from app.extractors import substack as substack_extractor
 from app.extractors import youtube as youtube_extractor
 
 BASE_DIR = Path(__file__).parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+
+
+def _ago(value) -> str:
+    """'5m ago', '3h ago', '2d ago', then '9 Oct' (year only when not this year)."""
+    try:
+        dt = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return str(value or "")
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    secs = max((now - dt).total_seconds(), 0)
+    if secs < 60:
+        return "just now"
+    if secs < 3600:
+        return f"{int(secs // 60)}m ago"
+    if secs < 86400:
+        return f"{int(secs // 3600)}h ago"
+    if secs < 7 * 86400:
+        return f"{int(secs // 86400)}d ago"
+    return f"{dt.day} {dt.strftime('%b')}" + ("" if dt.year == now.year else f" {dt.year}")
+
+
+def _asset_version() -> str:
+    """Changes whenever style.css or app.js changes, so the long-cached copies
+    are replaced on the next page load."""
+    h = hashlib.md5()
+    for name in ("style.css", "app.js"):
+        try:
+            st = (BASE_DIR / "static" / name).stat()
+            h.update(f"{name}:{st.st_size}:{int(st.st_mtime)}".encode())
+        except OSError:
+            h.update(name.encode())
+    return h.hexdigest()[:10]
+
+
+templates.env.filters["ago"] = _ago
+templates.env.globals["asset_v"] = _asset_version()
+
+
+def _flag(value) -> bool:
+    """Query flags are read as text so '?deep=' or '?unread=yes' never becomes a 422 error page."""
+    return str(value or "").strip().lower() in ("1", "true", "on", "yes")
+
+
+def _minutes(words: int) -> int:
+    return max(1, round(words / 220)) if words >= 120 else 0
 
 DEVICE_ID_COOKIE = "device_id"
 DEVICE_ID_MAX_AGE = 60 * 60 * 24 * 365 * 2
@@ -60,7 +113,7 @@ TABS = ["scientific", "music_poetry", "podcast", "religious", "courses"]
 
 # Columns the list pages need. Deliberately excludes `summary`: it can be tens of
 # KB per row, and 40 rows of it would be pulled over the network on every page view.
-RSS_LIST_COLS = "item_id, module_type, source_name, published_date, url, title, is_saved"
+RSS_LIST_COLS = reading.RSS_COLS
 
 # module_type -> (list page, label) for the back link on /item.
 ITEM_BACK = {
@@ -89,12 +142,26 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Content Aggregator", lifespan=lifespan)
-app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+class CachedStaticFiles(StaticFiles):
+    """Versioned URLs (?v=...) are cached for a year; others for an hour."""
+
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        if resp.status_code == 200:
+            versioned = b"v=" in scope.get("query_string", b"")
+            resp.headers["Cache-Control"] = ("public, max-age=31536000, immutable" if versioned
+                                             else "public, max-age=3600")
+        return resp
+
+
+app.mount("/static", CachedStaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
 # Closed-world sandbox: neutralises external links/forms/iframes in every HTML
 # response and sends a sandboxing CSP. See app/sandbox.py. SANDBOX_MODE=off
 # disables it (e.g. for debugging in a desktop browser).
 app.add_middleware(SandboxMiddleware)
+# Added last = outermost, so it compresses the final (already sanitised) HTML.
+app.add_middleware(GZipMiddleware, minimum_size=600)
 
 # ---------------------------------------------------------------- auth helper
 
@@ -157,9 +224,33 @@ def run_maintenance(
 
 # ---------------------------------------------------------------- hub
 
+def _hub_global() -> dict:
+    def load():
+        with db_session() as conn:
+            return reading.hub_global(conn)
+    return cache.get_or_set(("hub",), load)
+
+
 @app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
 def hub(request: Request):
-    return templates.TemplateResponse(request, "hub.html", {})
+    """Home. Also the keep-alive ping target, so it must never fail because the
+    database is slow or down: every database-backed part is optional."""
+    device_id = request.cookies.get(DEVICE_ID_COOKIE)
+    ctx = {"latest": [], "saved_count": 0, "unread": {}, "recent": [], "courses": [],
+           "has_device": bool(device_id)}
+    try:
+        g = _hub_global()
+        ctx["latest"], ctx["saved_count"] = g["latest"], g["saved_count"]
+        if device_id:
+            with db_session() as conn:
+                ctx["unread"] = reading.unread_counts(conn, device_id)
+                ctx["recent"] = reading.recent(conn, device_id, 6)
+                ctx["courses"] = [c for c in courses_db.list_courses(conn, device_id) if c["percent"] < 100][:3]
+                read = reading.read_set(conn, device_id, "rss", [i["item_id"] for i in ctx["latest"]])
+            ctx["latest"] = [{**i, "read": i["item_id"] in read} for i in ctx["latest"]]
+    except Exception:
+        pass   # degraded home: the navigation tiles still render
+    return templates.TemplateResponse(request, "hub.html", ctx)
 
 # ---------------------------------------------------------------- youtube
 
@@ -169,13 +260,17 @@ def youtube_home(request: Request, tab: str = "scientific", page: int = 1):
         return RedirectResponse("/youtube/courses", status_code=303)
     if tab not in TABS:
         tab = TABS[0]
+    page = max(page, 1)
     limit, offset = 30, (page - 1) * 30
-    with db_session() as conn:
-        videos = conn.execute(
-            "SELECT * FROM youtube_cache WHERE category = ? "
-            "ORDER BY published_date DESC LIMIT ? OFFSET ?",
-            (tab, limit, offset),
-        ).fetchall()
+
+    def load():
+        with db_session() as conn:
+            return conn.execute(
+                "SELECT video_id, title, channel_name, category, published_date, thumbnail_url, is_saved "
+                "FROM youtube_cache WHERE category = ? ORDER BY published_date DESC LIMIT ? OFFSET ?",
+                (tab, limit, offset),
+            ).fetchall()
+    videos = cache.get_or_set(("yt", tab, page), load)
     return templates.TemplateResponse(request, "youtube.html", {
         "videos": videos,
         "tabs": TABS, "active_tab": tab, "page": page,
@@ -236,7 +331,7 @@ def youtube_playlist(request: Request, playlist_id: str):
     if not videos:
         raise HTTPException(404, "playlist is empty or private")
     return templates.TemplateResponse(request, "youtube_playlist.html", {
-        "videos": videos, "playlist_id": playlist_id,
+        "videos": videos, "playlist_id": playlist_id, "tabs": TABS, "active_tab": None,
     })
 
 
@@ -314,7 +409,7 @@ def courses_home(request: Request, e: str = ""):
         with db_session() as conn:
             courses = courses_db.list_courses(conn, device_id)
     return templates.TemplateResponse(request, "youtube_courses.html", {
-        "courses": courses, "tabs": TABS, "max_courses": courses_db.MAX_COURSES,
+        "courses": courses, "tabs": TABS, "active_tab": "courses", "max_courses": courses_db.MAX_COURSES,
         "slots_left": courses_db.MAX_COURSES - len(courses),
         "error": COURSE_MESSAGES.get(e),
     })
@@ -356,7 +451,7 @@ def course_page(request: Request, playlist_id: str, v: str = ""):
     return templates.TemplateResponse(request, "youtube_course.html", {
         "course": course, "lessons": lessons, "current": current,
         "next_lesson": lessons[chosen + 1] if lessons and chosen + 1 < len(lessons) else None,
-        "autoplay": chosen is not None and v in index, "tabs": TABS,
+        "autoplay": chosen is not None and v in index, "tabs": TABS, "active_tab": "courses",
         "error": COURSE_MESSAGES.get(request.query_params.get("e", "")),
     })
 
@@ -432,7 +527,7 @@ def youtube_history(request: Request, page: int = 1):
                 (device_id, limit, offset),
             ).fetchall()
     resp = templates.TemplateResponse(request, "youtube_history.html", {
-        "entries": entries, "page": page,
+        "entries": entries, "page": page, "tabs": TABS, "active_tab": "history",
     })
     if is_new:
         _set_device_cookie(resp, device_id)  # set on the response actually returned
@@ -476,21 +571,86 @@ def toggle_save(module: str, item_id: str):
             raise HTTPException(404, "item not found")
         new_val = 0 if row["is_saved"] else 1
         conn.execute(f"UPDATE {table} SET is_saved = ? WHERE {pk} = ?", (new_val, item_id))
+    cache.clear()   # cached lists show the star
     return {"ok": True, "is_saved": bool(new_val)}
 
 # ---------------------------------------------------------------- substack
 
+SUBSTACK_PAGE = 20
+PAGE_SIZE = 40
+
+
+def _excerpt(head: str, n: int = 220) -> str:
+    text = _html.unescape(re.sub(r"<[^>]+>", " ", head or ""))
+    text = re.sub(r"\s+", " ", text).strip()
+    return text if len(text) <= n else text[:n].rsplit(" ", 1)[0] + "\u2026"
+
+
+def _with_read(device_id, kind: str, rows: list, key: str) -> list:
+    read = set()
+    if device_id and rows:
+        with db_session() as conn:
+            read = reading.read_set(conn, device_id, kind, [r[key] for r in rows])
+    return [{**r, "read": r[key] in read} for r in rows]
+
+
 @app.get("/substack", response_class=HTMLResponse)
-def substack_feed(request: Request, page: int = 1):
-    limit, offset = 20, (page - 1) * 20
-    with db_session() as conn:
-        articles = conn.execute(
-            "SELECT * FROM substack_cache ORDER BY published_date DESC LIMIT ? OFFSET ?",
-            (limit, offset),
-        ).fetchall()
+def substack_feed(request: Request, page: int = 1, unread: str = ""):
+    """Titles and short excerpts only: the full bodies stay in the database until
+    an article is opened, so the list is a few KB instead of the whole archive."""
+    device_id = request.cookies.get(DEVICE_ID_COOKIE)
+    unread = _flag(unread)
+    page = max(page, 1)
+    offset = (page - 1) * SUBSTACK_PAGE
+    cols = "article_id, author, title, published_date, url, is_saved, substr(content_html, 1, 2500) AS head"
+
+    def shape(rows):
+        return [{**{k: v for k, v in r.items() if k != "head"}, "excerpt": _excerpt(r["head"])} for r in rows]
+
+    if unread and device_id:
+        with db_session() as conn:
+            rows = conn.execute(
+                f"SELECT {cols} FROM substack_cache WHERE NOT EXISTS (SELECT 1 FROM read_items ri "
+                "WHERE ri.device_id = ? AND ri.kind = 'substack' AND ri.item_id = substack_cache.article_id) "
+                "ORDER BY published_date DESC LIMIT ? OFFSET ?", (device_id, SUBSTACK_PAGE, offset)).fetchall()
+        articles = shape(rows)
+    else:
+        def load():
+            with db_session() as conn:
+                return shape(conn.execute(
+                    f"SELECT {cols} FROM substack_cache ORDER BY published_date DESC LIMIT ? OFFSET ?",
+                    (SUBSTACK_PAGE, offset)).fetchall())
+        articles = cache.get_or_set(("substack", page), load)
     return templates.TemplateResponse(request, "substack.html", {
-        "articles": articles, "page": page,
+        "articles": _with_read(device_id, "substack", articles, "article_id"), "page": page,
+        "unread": unread, "has_device": bool(device_id), "page_size": SUBSTACK_PAGE,
     })
+
+
+@app.get("/substack/item", response_class=HTMLResponse)
+def substack_item(request: Request, item_id: str = Query("", alias="id")):
+    """A stored Substack article, read in-app from the database: no network, no
+    dependence on the publication's domain."""
+    if not item_id:
+        raise HTTPException(404, "article not found")
+    device_id, is_new = _device(request)
+    with db_session() as conn:
+        row = conn.execute(
+            "SELECT article_id, author, title, published_date, url, is_saved, content_html "
+            "FROM substack_cache WHERE article_id = ?", (item_id,)).fetchone()
+        if row is not None:
+            reading.mark_read(conn, device_id, "substack", item_id)
+    if row is None:
+        raise HTTPException(404, "article not found")
+    body = substack_extractor.sanitize_html(row.get("content_html") or "")
+    words = len(re.sub(r"<[^>]+>", " ", body).split())
+    resp = templates.TemplateResponse(request, "substack_item.html", {
+        "item": row, "body": body, "minutes": _minutes(words),
+        "reader_link": reader.reader_href(row.get("url") or "", "https://invalid.invalid/", reader.allowed_hosts()),
+    })
+    if is_new:
+        _set_device_cookie(resp, device_id)
+    return resp
 
 # ---------------------------------------------------------------- news / papers
 
@@ -499,74 +659,50 @@ NEWS_TABS = {
     "international": ["Al Jazeera"],
 }
 
-def _feed_page(request: Request, module_type: str, page: int):
-    # Retained exclusively for the /papers route
-    limit, offset = 40, (page - 1) * 40
-    with db_session() as conn:
-        items = conn.execute(
-            f"SELECT {RSS_LIST_COLS} FROM rss_cache WHERE module_type = ? "
-            "ORDER BY published_date DESC LIMIT ? OFFSET ?",
-            (module_type, limit, offset),
-        ).fetchall()
+
+def _rss_page(request: Request, where_sql: str, params: tuple, page: int, unread: bool,
+              tabs, active_tab, module_name: str, module_slug: str):
+    device_id = request.cookies.get(DEVICE_ID_COOKIE)
+    page = max(page, 1)
+    offset = (page - 1) * PAGE_SIZE
+    base = f"SELECT {RSS_LIST_COLS} FROM rss_cache WHERE {where_sql}"
+    if unread and device_id:     # per-device, so never cached
+        with db_session() as conn:
+            rows = conn.execute(
+                base + " AND NOT EXISTS (SELECT 1 FROM read_items ri WHERE ri.device_id = ? AND "
+                "ri.kind = 'rss' AND ri.item_id = rss_cache.item_id) ORDER BY published_date DESC LIMIT ? OFFSET ?",
+                (*params, device_id, PAGE_SIZE, offset)).fetchall()
+    else:
+        def load():
+            with db_session() as conn:
+                return conn.execute(base + " ORDER BY published_date DESC LIMIT ? OFFSET ?",
+                                    (*params, PAGE_SIZE, offset)).fetchall()
+        rows = cache.get_or_set(("rss", where_sql, params, page), load)
     return templates.TemplateResponse(request, "feed.html", {
-        "items": items, "page": page,
-        "module_name": module_type,
-        "module_slug": "papers",
-        "tabs": None,
+        "items": _with_read(device_id, "rss", rows, "item_id"), "page": page, "page_size": PAGE_SIZE,
+        "module_name": module_name, "module_slug": module_slug,
+        "tabs": tabs, "active_tab": active_tab, "unread": unread, "has_device": bool(device_id),
     })
+
 
 @app.get("/news", response_class=HTMLResponse)
-def news_feed(request: Request, tab: str = "country", page: int = 1):
+def news_feed(request: Request, tab: str = "country", page: int = 1, unread: str = ""):
+    unread = _flag(unread)
     if tab not in NEWS_TABS:
         tab = "country"
+    sources = NEWS_TABS[tab]
+    where = f"module_type = 'News' AND source_name IN ({','.join('?' * len(sources))})"
+    return _rss_page(request, where, tuple(sources), page, unread, list(NEWS_TABS.keys()), tab, "News", "news")
 
-    allowed_sources = NEWS_TABS[tab]
-    limit, offset = 40, (page - 1) * 40
-
-    # Dynamically construct the IN clause placeholders based on the array length
-    placeholders = ",".join("?" * len(allowed_sources))
-    query = f"""
-        SELECT {RSS_LIST_COLS} FROM rss_cache
-        WHERE module_type = 'News' AND source_name IN ({placeholders})
-        ORDER BY published_date DESC LIMIT ? OFFSET ?
-    """
-    params = tuple(allowed_sources) + (limit, offset)
-
-    with db_session() as conn:
-        items = conn.execute(query, params).fetchall()
-
-    return templates.TemplateResponse(request, "feed.html", {
-        "items": items, "page": page,
-        "module_name": "News",
-        "module_slug": "news",
-        "tabs": list(NEWS_TABS.keys()),
-        "active_tab": tab,
-    })
 
 @app.get("/papers", response_class=HTMLResponse)
-def library_feed(request: Request, tab: str = "Journals", page: int = 1):
-    # Map UI tabs directly to database module types
-    VALID_TABS = {"Journals": "Paper", "Blogs": "Blog"}
-
-    if tab not in VALID_TABS:
+def library_feed(request: Request, tab: str = "Journals", page: int = 1, unread: str = ""):
+    unread = _flag(unread)
+    valid_tabs = {"Journals": "Paper", "Blogs": "Blog"}   # UI tab -> module_type
+    if tab not in valid_tabs:
         tab = "Journals"
-
-    limit, offset = 40, (page - 1) * 40
-    target_module = VALID_TABS[tab]
-
-    with db_session() as conn:
-        items = conn.execute(
-            f"SELECT {RSS_LIST_COLS} FROM rss_cache WHERE module_type = ? ORDER BY published_date DESC LIMIT ? OFFSET ?",
-            (target_module, limit, offset),
-        ).fetchall()
-
-    return templates.TemplateResponse(request, "feed.html", {
-        "items": items, "page": page,
-        "module_name": "Library",
-        "module_slug": "papers",
-        "tabs": list(VALID_TABS.keys()),
-        "active_tab": tab,
-    })
+    return _rss_page(request, "module_type = ?", (valid_tabs[tab],), page, unread,
+                     list(valid_tabs.keys()), tab, "Library", "papers")
 
 # ---------------------------------------------------------------- item detail
 
@@ -574,24 +710,76 @@ def library_feed(request: Request, tab: str = "Journals", page: int = 1):
 def item_detail(request: Request, item_id: str = Query("", alias="id")):
     """One news / paper / blog item, read inside the app from the feed's own
     stored text. The id travels as a query parameter because ids are URLs.
-    Sync `def`: blocking DB call stays off the event loop."""
+    Opening it marks it read for this device."""
     if not item_id:
         raise HTTPException(404, "item not found")
+    device_id, is_new = _device(request)
     with db_session() as conn:
         row = conn.execute(
             f"SELECT {RSS_LIST_COLS}, summary FROM rss_cache WHERE item_id = ?", (item_id,)
         ).fetchone()
+        if row is not None:
+            reading.mark_read(conn, device_id, "rss", item_id)
     if row is None:
         raise HTTPException(404, "item not found")
     back_href, back_label = ITEM_BACK.get(row["module_type"], ("/", "Home"))
-    return templates.TemplateResponse(request, "item.html", {
-        "item": row,
-        # Sanitised at ingest and again here, so a bad row cannot inject markup.
-        "summary": generic_rss.sanitize_summary(row.get("summary") or ""),
+    # Sanitised at ingest and again here, so a bad row cannot inject markup.
+    summary = generic_rss.sanitize_summary(row.get("summary") or "")
+    resp = templates.TemplateResponse(request, "item.html", {
+        "item": row, "summary": summary,
+        "minutes": _minutes(len(re.sub(r"<[^>]+>", " ", summary).split())),
         # Only offered when the item's host is an allowed source.
         "reader_link": reader.reader_href(row.get("url") or "", "https://invalid.invalid/", reader.allowed_hosts()),
         "back_href": back_href, "back_label": back_label,
     })
+    if is_new:
+        _set_device_cookie(resp, device_id)
+    return resp
+
+# ---------------------------------------------------------------- saved / search / read state
+
+@app.get("/saved", response_class=HTMLResponse)
+def saved_page(request: Request, tab: str = "articles"):
+    """Starred items. The star lives on the item row, so (as before) it is shared
+    across devices, unlike read state, which is per device."""
+    if tab not in ("articles", "substack", "videos"):
+        tab = "articles"
+    with db_session() as conn:
+        data = reading.saved(conn)
+    return templates.TemplateResponse(request, "saved.html", {
+        "data": data, "tab": tab, "counts": {k: len(v) for k, v in data.items()},
+    })
+
+
+@app.get("/search", response_class=HTMLResponse)
+def search_page(request: Request, q: str = "", deep: str = ""):
+    """Local search over what is already stored. Titles and sources by default;
+    deep=1 also searches the text, which reads far more data."""
+    q = q.strip()[:200]
+    deep = _flag(deep)
+    results = None
+    if q:
+        with db_session() as conn:
+            results = reading.search(conn, q, deep)
+    total = sum(len(results[k]) for k in ("articles", "substack", "videos")) if results else 0
+    return templates.TemplateResponse(request, "search.html", {"q": q, "deep": deep, "results": results, "total": total})
+
+
+class ReadIn(BaseModel):
+    kind: str = ""
+    ids: list[str] = []
+
+
+@app.post("/api/read")
+def api_mark_read(payload: ReadIn, request: Request, response: Response):
+    """'Mark all read' on a list page: the ids currently shown, capped at 100."""
+    if payload.kind not in reading.KINDS:
+        raise HTTPException(400, "bad kind")
+    ids = [i for i in payload.ids[:100] if 0 < len(i) <= 2000]
+    device_id = _get_or_set_device_id(request, response)
+    with db_session() as conn:
+        count = reading.mark_many(conn, device_id, payload.kind, ids)
+    return {"ok": True, "count": count}
 
 # ---------------------------------------------------------------- reader (allowlisted)
 

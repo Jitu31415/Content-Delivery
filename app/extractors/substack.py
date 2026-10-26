@@ -28,6 +28,7 @@ cookie was bad is not upgraded later when the cookie is fixed.
 import feedparser
 import httpx
 from bs4 import BeautifulSoup
+from bs4.element import Comment
 
 from app.utils import insert_or_ignore_many, normalize_date
 
@@ -44,8 +45,19 @@ _HEADERS = {
 }
 
 
+# Elements whose CONTENT is never article text. unwrap() would keep that content
+# (script source, CSS rules, button labels) and show it in the article body, so
+# these are removed outright before everything else is unwrapped.
+DROP_TAGS = ["script", "style", "noscript", "iframe", "object", "embed", "svg", "form", "button",
+             "textarea", "select", "template", "video", "audio", "canvas", "head", "title"]
+
+
 def sanitize_html(raw_html: str) -> str:
     soup = BeautifulSoup(raw_html or "", "html.parser")
+    for tag in soup.find_all(DROP_TAGS):
+        tag.decompose()
+    for node in soup.find_all(string=lambda s: isinstance(s, Comment)):
+        node.extract()
     for tag in soup.find_all(True):
         if tag.name not in ALLOWED_TAGS:
             tag.unwrap()

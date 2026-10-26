@@ -1,23 +1,41 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{% block title %}reading room{% endblock %}</title>
-  <link rel="stylesheet" href="/static/style.css">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>{% block title %}reading room{% endblock %}</title>
+<script>(function(){var d=document.documentElement,S;try{S=window.localStorage}catch(e){}
+function g(k){try{return S.getItem(k)}catch(e){return null}}
+var fs=parseInt(g('rr_fs'),10);if(fs>=14&&fs<=28)d.style.setProperty('--fs',fs+'px');
+var th=g('rr_theme');if(th==='light'||th==='sepia'||th==='dark')d.setAttribute('data-theme',th);})();</script>
+<link rel="stylesheet" href="/static/style.css?v={{ asset_v }}">
+{% block head %}{% endblock %}
 </head>
 <body>
-  <header class="site-header">
-    <a href="/" class="wordmark">reading room</a>
-    <nav class="site-nav">
-      <a href="/youtube">youtube</a>
-      <a href="/substack">substack</a>
-      <a href="/news">news</a>
-      <a href="/papers">papers</a>
-    </nav>
-  </header>
-  <main>
-    {% block content %}{% endblock %}
-  </main>
+{% set p = request.url.path %}
+<header class="topbar">
+  <a class="brand" href="/">reading room</a>
+  <nav class="nav" aria-label="Sections">
+    <a href="/papers"{% if p.startswith('/papers') %} class="on"{% endif %}>Library</a>
+    <a href="/news"{% if p.startswith('/news') %} class="on"{% endif %}>News</a>
+    <a href="/substack"{% if p.startswith('/substack') %} class="on"{% endif %}>Substack</a>
+    <a href="/youtube"{% if p.startswith('/youtube') %} class="on"{% endif %}>YouTube</a>
+    <a href="/saved"{% if p.startswith('/saved') %} class="on"{% endif %}>Saved</a>
+  </nav>
+  <form class="search" action="/search" method="get" role="search">
+    <input type="search" name="q" placeholder="Search" aria-label="Search">
+  </form>
+  <div class="tools">
+    <button type="button" data-size="-1" aria-label="Smaller text">A&minus;</button>
+    <button type="button" data-size="1" aria-label="Larger text">A+</button>
+    <button type="button" data-theme-toggle aria-label="Change theme">&#9680;</button>
+  </div>
+</header>
+<main class="page">
+{% block content %}{% endblock %}
+</main>
+<script src="/static/app.js?v={{ asset_v }}" defer></script>
+{% block scripts %}{% endblock %}
 </body>
 </html>
