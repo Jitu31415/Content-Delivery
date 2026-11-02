@@ -6,6 +6,7 @@
       "UCMOqf8ab-42UUQIdVoKwjlQ",
       "UCYO_jab_esuFRV4b17AJtAw",
       "UCUHW94eEFW7hkUMVaZz4eDg",
+      "UCEIwxahdLz7bap-VDs9h35A",
       "UConVfxXodg78Tzh5nNu85Ew",
       "UCvBqzzvUBLCs8Y7Axb-jZew"
     ],
@@ -22,6 +23,7 @@
       "UCGq-a57w-aPwyi3pW7XLiHw",
       "UCpjlh0e319ksmoOD7bQFSiw",
       "UCAuUUnT6oDeKwE6v1NGQxug",
+      "UCSHZKyawb77ixDdsGog4iWA",
       "UCnxuOd8obvLLtf5_-YKFbiQ",
       "UCvQECJukTDE2i6aCoMnS-Vg"
     ],
@@ -44,7 +46,7 @@
   "news": [
     {
       "name": "Daily_Star",
-      "url": "https://www.thedailystar.net/frontpage/rss.xml"
+      "url": "https://www.thedailystar.net/frontpage/"
     },
     {
       "name": "Prothom Alo",
@@ -52,7 +54,7 @@
     },
     {
       "name": "The Business Standard",
-      "url": "https://www.tbsnews.net/rss.xml"
+      "url": "https://www.tbsnews.net/"
     },
     {
       "name": "Al Jazeera",
